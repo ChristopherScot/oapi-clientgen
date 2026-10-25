@@ -210,8 +210,20 @@ export function createClient({
   // { error } for both, so this puts the distinction back.
   //
   // `response` is undefined exactly when the request never completed,
-  // which is the test. throwOnError is not usable here: it throws for
-  // a 404 too.
+  // which is the test. throwOnError is not usable as a default here:
+  // it throws for a 404 too.
+  //
+  // What this returns stays the SERVER'S PARSED BODY, deliberately
+  // not wrapped in an Error class. The client uses ONE value for
+  // both outcomes - `y = await interceptor(...)`, then either
+  // `throw y` under throwOnError or `return { error: y }` without it
+  // - so a wrapper cannot apply to the throwing case alone. It would
+  // also reach consumers that forward the body onward, turning
+  // `reply.code(409).send(error)` into a response carrying our class
+  // name and internal URL instead of the API's own error.
+  //
+  // An API wanting an exception passes throwOnError per call and
+  // converts at its own boundary, where the body's shape is known.
   client.interceptors.error.use((error, response) => {
     if (response === undefined) {
       throw error instanceof Error ? error : new Error('request did not complete', { cause: error })
