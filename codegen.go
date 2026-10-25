@@ -22,12 +22,29 @@
 // value would make that one edit break the other caller silently.
 package codegen
 
+import "strings"
+
 // OgenVersion is the ogen release every generated Go client is built
 // with.
 //
 // Pinned exactly: with @latest the build breaks on the day ogen
 // publishes, in a file nobody touched.
 const OgenVersion = "v1.24.0"
+
+// HeyAPIVersion is the @hey-api/openapi-ts release every generated
+// TypeScript client is built with.
+//
+// hey-api rather than openapi-typescript because it emits a NAMED
+// function per operationId - listPokemon({...}) - which is the shape
+// ogen already gives the Go client. The two halves of one generated
+// client disagreeing about how you call them is the kind of thing
+// nobody notices until they have written both.
+const HeyAPIVersion = "0.99.0"
+
+// TypescriptVersion is hey-api's peer dependency, pinned for the same
+// reason as the generators themselves: a floating major would change
+// generated output on a day nobody touched the spec.
+const TypescriptVersion = "5.9.3"
 
 // OpenAPITypescriptVersion is the openapi-typescript release every
 // generated TypeScript client is built with.
@@ -48,10 +65,44 @@ func OgenCommand() string { return OgenModule + "@" + OgenVersion }
 // TypescriptCommand returns the npx argv for the pinned
 // openapi-typescript, reading spec and writing out.
 //
+// Still here for a caller that wants types only. The scaffolded client
+// uses HeyAPICommand, which emits named operations as well.
+//
 // --yes so a CI runner with no prior install does not stop on npx's
 // confirmation prompt.
 func TypescriptCommand(spec, out string) []string {
 	return []string{"npx", "--yes", "openapi-typescript@" + OpenAPITypescriptVersion, spec, "-o", out}
+}
+
+// HeyAPICommand generates the TypeScript client, reading its settings
+// from openapi-ts.config.ts in dir.
+//
+// Config file rather than flags, so the settings live beside the
+// generated code the way ogen.yml does - and so a reader can see what
+// produced it without going through this tool.
+func HeyAPICommand() []string {
+	// typescript is a peer dependency hey-api loads at run time, and
+	// npx does not install peers: without it the generator dies on
+	// "Cannot read properties of undefined (reading 'AnyKeyword')",
+	// which names neither hey-api nor the missing package. -p for each
+	// so npx provisions both before running the binary.
+	return []string{
+		"npx", "--yes",
+		"-p", "@hey-api/openapi-ts@" + HeyAPIVersion,
+		"-p", "typescript@" + TypescriptVersion,
+		"openapi-ts",
+	}
+}
+
+// HeyAPICommandIn runs HeyAPICommand with dir as the working
+// directory.
+//
+// Through sh because the runner executes one argv in the SERVICE
+// directory, and hey-api resolves its config relative to where it
+// runs. Quoted so a directory with a space in it does not become two
+// arguments.
+func HeyAPICommandIn(dir string) []string {
+	return []string{"sh", "-c", "cd '" + dir + "' && " + strings.Join(HeyAPICommand(), " ")}
 }
 
 // Swagger2OpenAPIVersion converts a Swagger 2.0 document to OpenAPI
