@@ -49,33 +49,11 @@ const HeyAPIVersion = "0.99.0"
 // generated output on a day nobody touched the spec.
 const TypescriptVersion = "5.9.3"
 
-// OpenAPITypescriptVersion is the openapi-typescript release every
-// generated TypeScript client is built with.
-//
-// Pinned exactly rather than to a major. `openapi-typescript@7`
-// resolves to whatever 7.x is current at run time, so the same spec
-// could produce a different schema.d.ts on two different days - the
-// property the ogen pin exists to prevent. v7 is the ceiling because
-// v8 requires TypeScript ^5 in the consuming project.
-const OpenAPITypescriptVersion = "7.4.4"
-
 // OgenModule is the module path of ogen's command.
 const OgenModule = "github.com/ogen-go/ogen/cmd/ogen"
 
 // OgenCommand is the `go run` invocation of the pinned ogen.
 func OgenCommand() string { return OgenModule + "@" + OgenVersion }
-
-// TypescriptCommand returns the npx argv for the pinned
-// openapi-typescript, reading spec and writing out.
-//
-// Still here for a caller that wants types only. The scaffolded client
-// uses HeyAPICommand, which emits named operations as well.
-//
-// --yes so a CI runner with no prior install does not stop on npx's
-// confirmation prompt.
-func TypescriptCommand(spec, out string) []string {
-	return []string{"npx", "--yes", "openapi-typescript@" + OpenAPITypescriptVersion, spec, "-o", out}
-}
 
 // HeyAPICommand generates the TypeScript client, reading its settings
 // from openapi-ts.config.ts in dir.
