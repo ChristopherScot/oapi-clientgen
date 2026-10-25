@@ -80,12 +80,15 @@ func TestResilientFetchIsReachableWithoutCreateClient(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Exact paths, not suffixes: "resilience.test.ts" ends in
+	// "resilience.ts" too, and a suffix match picked whichever came
+	// first in tsFiles.
 	var resilience, index string
 	for _, f := range files {
-		switch {
-		case strings.HasSuffix(f.Path, "resilience.ts"):
+		switch f.Path {
+		case "resilience.ts":
 			resilience = f.Body
-		case strings.HasSuffix(f.Path, "index.ts"):
+		case "index.ts":
 			index = f.Body
 		}
 	}

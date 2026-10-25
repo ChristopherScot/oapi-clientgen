@@ -125,6 +125,7 @@ func render(name string, p Params) (string, error) {
 // here, so adding a file does not mean remembering a second list.
 var tsFiles = []struct{ tmpl, path string }{
 	{"ts_resilience.ts.tmpl", "resilience.ts"},
+	{"ts_resilience_test.ts.tmpl", "resilience.test.ts"},
 	{"ts_index.ts.tmpl", "index.ts"},
 }
 
