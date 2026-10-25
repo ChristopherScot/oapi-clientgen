@@ -23,6 +23,18 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      # The TypeScript client's tests run under `node --test` with node
+      # stripping the types itself, so this job needs a node and needs
+      # it to be a known one. Without this step it runs on whatever the
+      # runner image happens to ship - v22 today, which is below the
+      # floor the generated clients declare, and the suite fails.
+      #
+      # 24 because that is what a generated client's own package.json
+      # asks for, so this tests what consumers run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       # make test, not the commands themselves: the Makefile says it
       # runs "what CI runs", and that is only true if this IS it. Two
       # copies of the same command drift, and the one that drifts is
