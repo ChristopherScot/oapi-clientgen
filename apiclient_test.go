@@ -1,6 +1,7 @@
 package apiclient
 
 import (
+	"bytes"
 	"go/format"
 	"strings"
 	"testing"
@@ -139,8 +140,18 @@ func TestEveryRewrittenFileSaysItIsGenerated(t *testing.T) {
 			t.Fatalf("%s: no files", tc.lang)
 		}
 		for _, f := range files {
-			if !strings.Contains(f.Body, "Do not edit") {
+			// WroteIt, not a substring: it is the same check that
+			// decides whether a retired file may be deleted, so
+			// asserting it here means a template cannot drift into a
+			// header that RemoveRetired will not recognise. Matching
+			// "Do not edit" loosely is what let that happen before.
+			if !WroteIt([]byte(f.Body)) {
 				t.Errorf("%s/%s does not say it is generated, but regen rewrites it", tc.lang, f.Path)
+			}
+			if !strings.HasPrefix(f.Body, Header("//")) &&
+				!strings.HasPrefix(f.Body, "/* eslint-disable */\n"+Header("//")) {
+				t.Errorf("%s/%s does not start with the shared header; it has its own copy of the wording:\n%s",
+					tc.lang, f.Path, firstLines(f.Body, 4))
 			}
 			// TypeScript additionally has to opt out of lint. These
 			// files sit ABOVE generated/, so the consuming repo's
@@ -228,5 +239,52 @@ func TestGeneratedGoIsFormatted(t *testing.T) {
 		if string(want) != f.Body {
 			t.Errorf("%s is not gofmt-clean; fix the template, not the output", f.Path)
 		}
+	}
+}
+
+// firstLines is the start of a rendered file, for an error that has to
+// show what a header actually looks like.
+func firstLines(s string, n int) string {
+	lines := strings.SplitN(s, "\n", n+1)
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// No template may spell the header out itself.
+//
+// Checking the rendered output cannot catch this: a hand-written copy
+// renders to exactly the same bytes as the call, right up until
+// someone changes one and not the other six. That is how the wording
+// came to exist in eight places in two variants, and how a reader of
+// hey-api's output was told not to edit it without being told what
+// would overwrite them. So read the templates themselves.
+func TestNoTemplateWritesItsOwnHeader(t *testing.T) {
+	entries, err := templates.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".tmpl") {
+			continue
+		}
+		seen++
+		body, err := templates.ReadFile(e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(body, []byte(generatedMarker)) {
+			t.Errorf("%s writes the header itself; call {{ header `//` }} so the wording has one home",
+				e.Name())
+		}
+		if !bytes.Contains(body, []byte("{{ header ")) {
+			t.Errorf("%s has no header call, so what it renders says nothing about being generated",
+				e.Name())
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no templates found; this test would pass on an empty directory")
 	}
 }
