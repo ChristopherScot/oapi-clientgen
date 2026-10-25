@@ -1,6 +1,7 @@
 package apiclient
 
 import (
+	"go/format"
 	"strings"
 	"testing"
 )
@@ -189,5 +190,32 @@ func TestGoConstructorMatchesOgensSignature(t *testing.T) {
 				t.Errorf("missing call:\n  want %s", tc.wantCall)
 			}
 		})
+	}
+}
+
+// Generated Go has to be gofmt-clean. It lands in consumers' repos
+// where a CI step or a pre-commit hook runs gofmt, and a diff there
+// points at a file the consumer cannot usefully edit - the fix is
+// always back here in the template.
+func TestGeneratedGoIsFormatted(t *testing.T) {
+	files, err := Go(Params{
+		Name: "x", Version: "1.0.0", Package: "api",
+		ImportPath: "example.com/x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if !strings.HasSuffix(f.Path, ".go") {
+			continue
+		}
+		want, err := format.Source([]byte(f.Body))
+		if err != nil {
+			t.Errorf("%s does not parse: %v", f.Path, err)
+			continue
+		}
+		if string(want) != f.Body {
+			t.Errorf("%s is not gofmt-clean; fix the template, not the output", f.Path)
+		}
 	}
 }
