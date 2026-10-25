@@ -25,9 +25,9 @@ package codegen
 import (
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/ChristopherScot/homelabctl/internal/apiclient"
-	"strings"
 )
 
 // OgenVersion is the ogen release every generated Go client is built

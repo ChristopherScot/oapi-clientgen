@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherScot/homelabctl/internal/apiclient"
 )
 
 // configPaths pulls input and output.path back out of a generated
@@ -98,4 +100,29 @@ func resolveFrom(cwd, p string) string {
 		return filepath.Clean(p)
 	}
 	return filepath.Join(cwd, p)
+}
+
+// This config is the file that carried the third wording.
+//
+// The notice said a file was generated without naming what would
+// overwrite it, and nothing here noticed, because this is the one
+// consumer of the header with no test. The templates have one; so
+// does MarkGenerated's. Find the bug once.
+func TestBothConfigsCarryTheSharedHeader(t *testing.T) {
+	_, nested, err := HeyAPIConfigNestedIn("/repo/app/clients/zoom", "/repo/app/zoom.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, cfg string }{
+		{"AtRoot", HeyAPIConfigAtRoot("../../openapi.yml")},
+		{"NestedIn", nested},
+	} {
+		if !strings.HasPrefix(tc.cfg, apiclient.Header("//")) {
+			t.Errorf("%s does not start with the shared header; it has its own copy "+
+				"of the wording:\n%s", tc.name, tc.cfg)
+		}
+		if !apiclient.WroteIt([]byte(tc.cfg)) {
+			t.Errorf("%s is not claimed by WroteIt, so it could never be retired", tc.name)
+		}
+	}
 }
