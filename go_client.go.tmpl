@@ -229,19 +229,22 @@ func New(serverURL string, o HTTPOptions{{ if .HasSecurity }}, sec SecuritySourc
 // retryAfter reads the server's own answer. RFC 9110 allows either a
 // delay in seconds or an HTTP-date, and servers send both in the wild.
 // Capped so an hour-long value cannot masquerade as a hang.
-func retryAfter(resp *http.Response, max time.Duration) (time.Duration, bool) {
+// retryAfter reads the server's own answer. The third result says
+// the server asked for longer than max: the caller must give up
+// rather than substitute a shorter wait of its own.
+func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok bool, tooLong bool) {
 	if resp == nil {
-		return 0, false
+		return 0, false, false
 	}
 	v := resp.Header.Get("Retry-After")
 	if v == "" {
-		return 0, false
+		return 0, false, false
 	}
 
 	var d time.Duration
 	if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 		if secs < 0 {
-			return 0, false
+			return 0, false, false
 		}
 		d = time.Duration(secs) * time.Second
 	} else if t, err := http.ParseTime(v); err == nil {
@@ -250,13 +253,19 @@ func retryAfter(resp *http.Response, max time.Duration) (time.Duration, bool) {
 			d = 0
 		}
 	} else {
-		return 0, false
+		return 0, false, false
 	}
 
+	// Longer than we are willing to wait means STOP, not "ignore the
+	// header". Returning false here sent the caller back to the
+	// policy's own backoff, so a server asking for an hour was
+	// retried in a second - the opposite of what it asked for, at the
+	// moment it was most emphatic. maxRetryAfter is a bound on our
+	// patience, not a filter on the server's answer.
 	if d > max {
-		return 0, false
+		return 0, false, true
 	}
-	return d, true
+	return d, true, false
 }
 
 func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -273,6 +282,20 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 		resp *http.Response
 		err  error
 	)
+
+	// Deferred so that EVERY exit reports back, including the
+	// cancellation return below. allow() hands out the half-open
+	// probe and only record() takes it back: a probe that returns
+	// without reporting leaves the breaker believing it is still out
+	// there, and allow() then refuses everyone for good. Wedged
+	// closed is worse than the stampede it replaced, because it does
+	// not heal.
+	if c.breaker != nil {
+		defer func() {
+			c.breaker.record(err != nil || (resp != nil && resp.StatusCode >= http.StatusInternalServerError))
+		}()
+	}
+
 	for attempt := 0; ; attempt++ {
 		resp, err = c.http.Do(req)
 		if attempt >= len(backoffs) || !c.policy.Retry(req, resp, err) {
@@ -281,7 +304,13 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 
 		// The server's Retry-After wins: it knows when capacity returns.
 		wait := backoffs[attempt]
-		if d, ok := retryAfter(resp, c.maxRetryAfter); ok {
+		d, ok, tooLong := retryAfter(resp, c.maxRetryAfter)
+		if tooLong {
+			// It asked for longer than we will wait. Hand the
+			// response back rather than retrying sooner than it said.
+			break
+		}
+		if ok {
 			wait = d
 		}
 
@@ -299,12 +328,12 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 		select {
 		case <-req.Context().Done():
 			timer.Stop()
-			return nil, req.Context().Err()
+			// Named results, so the deferred record() sees the
+			// cancellation rather than the last response.
+			resp, err = nil, req.Context().Err()
+			return resp, err
 		case <-timer.C:
 		}
-	}
-	if c.breaker != nil {
-		c.breaker.record(err != nil || (resp != nil && resp.StatusCode >= http.StatusInternalServerError))
 	}
 	return resp, err
 }

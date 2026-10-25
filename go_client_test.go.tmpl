@@ -123,15 +123,54 @@ func TestRetryAfterBeatsThePolicyBackoff(t *testing.T) {
 // Sleeping an hour inside a request is indistinguishable from a hang.
 func TestRetryAfterIsCapped(t *testing.T) {
 	resp := &http.Response{Header: http.Header{"Retry-After": []string{"3600"}}}
-	if _, ok := retryAfter(resp, 30*time.Second); ok {
-		t.Error("accepted an hour-long Retry-After")
+	_, ok, tooLong := retryAfter(resp, 30*time.Second)
+	if ok {
+		t.Error("accepted an hour-long Retry-After as a wait")
+	}
+	if !tooLong {
+		t.Error("an hour-long Retry-After must report tooLong, or the caller substitutes its own shorter backoff")
+	}
+}
+
+// What the cap means. Over the limit is "stop", not "ignore the
+// header": falling back to the policy's backoff retried a server
+// that asked for an hour after one second, which is the opposite of
+// what it asked for.
+func TestTooLongRetryAfterStopsRatherThanRetryingSooner(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: the server asked for an hour", attempts)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("waited %v before giving up", elapsed)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want the 429 handed back", resp.StatusCode)
 	}
 }
 
 func TestRetryAfterAcceptsAnHTTPDate(t *testing.T) {
 	when := time.Now().Add(3 * time.Second).UTC().Format(http.TimeFormat)
 	resp := &http.Response{Header: http.Header{"Retry-After": []string{when}}}
-	d, ok := retryAfter(resp, 30*time.Second)
+	d, ok, _ := retryAfter(resp, 30*time.Second)
 	if !ok {
 		t.Fatal("rejected a valid HTTP-date")
 	}
@@ -142,7 +181,7 @@ func TestRetryAfterAcceptsAnHTTPDate(t *testing.T) {
 
 func TestUnparseableRetryAfterFallsBackToThePolicy(t *testing.T) {
 	resp := &http.Response{Header: http.Header{"Retry-After": []string{"soon-ish"}}}
-	if _, ok := retryAfter(resp, 30*time.Second); ok {
+	if _, ok, _ := retryAfter(resp, 30*time.Second); ok {
 		t.Error("accepted an unparseable Retry-After")
 	}
 }
@@ -373,5 +412,50 @@ func TestTransportFailureIsRetried(t *testing.T) {
 	// single-attempt run would come back far sooner.
 	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
 		t.Errorf("returned after %v: the transport failure was not retried", elapsed)
+	}
+}
+
+// The half-open probe is a loan: allow() hands it out, record() takes
+// it back. A probe that returns without reporting - a caller who
+// cancels mid-backoff, which is routine in a CLI or a phone app -
+// leaves the breaker believing it is still in flight, and allow()
+// then refuses everyone for good. Wedged closed does not heal, so it
+// is worse than the stampede the probe gate replaced.
+func TestCancelledProbeDoesNotWedgeTheBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{Threshold: 1, Cooldown: 10 * time.Millisecond}
+	c := NewHTTPClient(HTTPOptions{Breaker: b})
+
+	// Trip it.
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// Take the probe, then give up while it is backing off.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	probe, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Do(probe); err == nil {
+		t.Fatal("want the context error from the abandoned probe")
+	}
+
+	// The breaker has to be usable again once the cooldown lapses.
+	time.Sleep(30 * time.Millisecond)
+	if !b.allow() {
+		t.Error("breaker wedged: the abandoned probe was never returned")
 	}
 }

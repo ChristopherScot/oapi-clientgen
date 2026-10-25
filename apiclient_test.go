@@ -130,6 +130,14 @@ func TestEveryRewrittenFileSaysItIsGenerated(t *testing.T) {
 			if !strings.Contains(f.Body, "Do not edit") {
 				t.Errorf("%s/%s does not say it is generated, but regen rewrites it", tc.lang, f.Path)
 			}
+			// TypeScript additionally has to opt out of lint. These
+			// files sit ABOVE generated/, so the consuming repo's
+			// ignore patterns - which name that directory - do not
+			// reach them, and house rules like `curly` fail a build
+			// over code nobody there wrote.
+			if tc.lang == "ts" && !strings.Contains(f.Body, "/* eslint-disable */") {
+				t.Errorf("ts/%s does not disable lint; it is generated but outside generated/", f.Path)
+			}
 		}
 	}
 }
