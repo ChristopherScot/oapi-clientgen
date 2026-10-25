@@ -157,7 +157,7 @@ func TestWroteItClaimsEveryGeneratedFile(t *testing.T) {
 			}
 		}
 	}
-	if !apiclient.WroteIt([]byte(apiclient.GeneratedHeader)) {
+	if !apiclient.WroteIt([]byte(apiclient.GeneratedHeader())) {
 		t.Error("WroteIt does not claim GeneratedHeader, which MarkGenerated writes")
 	}
 }
