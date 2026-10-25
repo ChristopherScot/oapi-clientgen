@@ -200,6 +200,11 @@ type Breaker struct {
 	// a Breaker nobody configured should not refuse traffic. Leave
 	// Breaker nil on HTTPOptions to disable circuit breaking; this
 	// field is for choosing where the circuit trips.
+	//
+	// The TypeScript client deliberately does the opposite - its
+	// `new Breaker()` takes constructor defaults and opens after 5 -
+	// because a constructor can carry a default and a zero value
+	// cannot. Both are tested. Do not "fix" either to match.
 	FailedRequests int
 	Cooldown       time.Duration
 

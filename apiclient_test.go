@@ -92,8 +92,16 @@ func TestResilientFetchIsReachableWithoutCreateClient(t *testing.T) {
 			index = f.Body
 		}
 	}
-	if resilience == "" || index == "" {
-		t.Fatal("expected both resilience.ts and index.ts")
+	// Both named, because an empty one means the loop matched nothing
+	// and every assertion below would pass vacuously. That is how a
+	// suffix match on "resilience.ts" - which "resilience.test.ts"
+	// also satisfies - went unnoticed: it depended on the order of
+	// tsFiles, not on the paths being right.
+	if resilience == "" {
+		t.Fatal("no resilience.ts rendered")
+	}
+	if index == "" {
+		t.Fatal("no index.ts rendered")
 	}
 
 	if !strings.Contains(resilience, "export function createResilientFetch") {

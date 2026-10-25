@@ -120,8 +120,7 @@ func render(name string, p Params) (string, error) {
 	return buf.String(), nil
 }
 
-// tsFiles and goFiles are the one inventory of what each client is
-// made of. A consumer decides WHERE they go; what they ARE is decided
+// These lists are the one inventory of what each client is made of. A consumer decides WHERE they go; what they ARE is decided
 // here, so adding a file does not mean remembering a second list.
 var tsFiles = []struct{ tmpl, path string }{
 	{"ts_resilience.ts.tmpl", "resilience.ts"},
@@ -129,7 +128,7 @@ var tsFiles = []struct{ tmpl, path string }{
 }
 
 // tsTestFiles are rendered by this repo's own tests and NOT shipped to
-// consumers, which is the one place the two languages differ.
+// consumers.
 //
 // The Go tests ship because a consumer can run them: same toolchain,
 // same runner, `go test ./...` finds them and they pass. The
@@ -157,8 +156,8 @@ var goFiles = []struct{ tmpl, path string }{
 // client.
 func TypeScript(p Params) ([]File, error) { return files(tsFiles, p) }
 
-// TypeScriptTests returns the TypeScript client's own tests. They are
-// rendered by this repo's tests rather than shipped; see tsTestFiles.
+// TypeScriptTests returns the TypeScript client's own tests; see
+// tsTestFiles for why they do not ship.
 func TypeScriptTests(p Params) ([]File, error) { return files(tsTestFiles, p) }
 
 // Go returns the files that sit beside a generated Go client.

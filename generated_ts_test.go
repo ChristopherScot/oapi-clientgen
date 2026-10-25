@@ -1,6 +1,8 @@
 package apiclient_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -8,13 +10,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherScot/homelabctl/internal/apiclient"
 )
 
 // The TypeScript counterpart of TestTheGeneratedTestsPass, and the
-// answer to the asymmetry that prompted it: the Go client shipped 34
-// tests and the TypeScript one shipped none, though both carry the
+// answer to the asymmetry that prompted it: the Go client shipped
+// tests of its own and the TypeScript one shipped none, though both carry the
 // same breaker, the same Retry-After handling and the same rule about
 // which methods may be retried. A behaviour guaranteed in one language
 // and merely intended in the other is not guaranteed.
@@ -81,10 +84,32 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("node", "--test", "resilience.test.ts")
+	// --test-timeout so a wedged test is reported rather than waited
+	// on, and a deadline on the process because the flag does not end
+	// the run: node reports "test timed out", then sits on whatever
+	// timer is still pending. Measured with the Retry-After cap
+	// removed, which makes the client honour a 3600s Retry-After - the
+	// test failed in a second and the process ran until something
+	// killed it.
+	//
+	// Buffer the output ourselves instead of CombinedOutput, so that
+	// when the deadline does fire we can still print what node said.
+	// exec's own context handling kills the process and discards it,
+	// which loses the diagnosis at the moment it is worth most.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", "--test", "--test-timeout=30000", "resilience.test.ts")
 	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Errorf("node --test in %s: %v\n%s", dir, err, indent(string(out)))
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err = cmd.Run()
+	if ctx.Err() != nil {
+		t.Errorf("node --test in %s never exited; killed after %v\n%s",
+			dir, 2*time.Minute, indent(out.String()))
+		return
+	}
+	if err != nil {
+		t.Errorf("node --test in %s: %v\n%s", dir, err, indent(out.String()))
 	}
 }
 

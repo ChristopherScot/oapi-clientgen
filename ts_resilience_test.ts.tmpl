@@ -62,11 +62,16 @@ function withFetch<T>(s: { fetch: any }, fn: () => Promise<T>): Promise<T> {
 // Bounds a wait that is only supposed to be short.
 //
 // Every "does not wait" assertion here has the same failure mode: with
-// the bug present the promise does not settle at all, so a plain await
-// hangs rather than failing. `node --test --test-timeout` does not
-// interrupt a pending timer, so the run wedges and a consumer's CI
-// hangs instead of going red. Race the work against a timer and the
-// test fails in a second with a message that names the cause.
+// the bug present the promise does not settle, so a plain await waits
+// as long as the bug says to - an hour, for the Retry-After cap. The
+// harness passes --test-timeout, which does report such a test as
+// timed out, but it reports it at the timeout rather than at the
+// second the bug is provable, and it does not end the run: node then
+// sits on the pending timer until the harness's own deadline kills it.
+//
+// So race the work against a timer here. The test fails in a second
+// with a message naming the cause, which is the line someone reads
+// first.
 function within<T>(ms: number, what: string, p: Promise<T>): Promise<T> {
   return Promise.race([
     p,
@@ -120,12 +125,8 @@ test('a POST is never retried', async () => {
 })
 
 test('a retried request resends its body', async () => {
-  const bodies: string[] = []
   const s = stub([
-    (req) => {
-      bodies.push('pending')
-      return new Response('', { status: 503 })
-    },
+    () => new Response('', { status: 503 }),
     () => new Response('', { status: 200 }),
   ])
   // Read the bodies off the recorded requests rather than inside the

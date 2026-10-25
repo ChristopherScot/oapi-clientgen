@@ -3,10 +3,20 @@
 // `client generate` rewrite this file, so edits are lost silently.
 // Change the template in homelabctl instead.
 // Resilience for the {{ .Name }} client: timeout, retry, circuit
-// breaker and the identifying headers. Defaults match the Go client in
-// api/client.go: 5s timeout, one retry (five can mean five times the
-// traffic to something already struggling), and a breaker - both
-// clients failing the same way is the point.
+// breaker and the identifying headers. The transport defaults match
+// the Go client in api/client.go - 5s timeout, one retry (five can
+// mean five times the traffic to something already struggling) - and
+// both clients failing the same way is the point.
+//
+// The ONE place they differ is an unconfigured Breaker, and it is a
+// difference in the languages rather than a decision. `new Breaker()`
+// here takes the constructor defaults and opens after 5 failures; Go's
+// `&Breaker{}` has FailedRequests of 0 and lets everything through,
+// because a zero value cannot carry a default and a Breaker nobody
+// configured should not refuse traffic. Neither side is wrong for its
+// language, and both are tested; what would be wrong is assuming the
+// other one matches. Omit `breaker` (nil, in Go) to disable breaking
+// in either.
 //
 //   import { createClient, listThings } from '{{ .ImportPath }}'
 //   const client = createClient({ baseUrl: 'https://{{ .Name }}' })
