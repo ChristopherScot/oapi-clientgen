@@ -230,15 +230,10 @@ func (b *Breaker) allow() bool {
 	return false
 }
 
-// record is the other half of allow: it takes the probe slot back
-// and decides what the outcome does to the failure run.
-//
-// No early returns, on purpose. Each outcome says only what it does
-// to the run; the probe accounting and the clock happen once, below,
-// on every path. An outcome added later cannot forget to hand the
-// slot back or to re-arm the cooldown, which is how ignore shipped
-// broken twice - once wedging the breaker closed, once letting an
-// open circuit stop throttling.
+// record is the other half of allow. It takes the probe slot back if
+// this request held it, updates the failure run, and re-arms the
+// cooldown when the circuit is open and this request did not prove
+// recovery.
 func (b *Breaker) record(o outcome) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -246,28 +241,38 @@ func (b *Breaker) record(o outcome) {
 	probe := b.probing
 	b.probing = false
 
+	// recovered says the dependency answered, which is the only
+	// evidence that it is back. A failure is evidence against; an
+	// inconclusive answer is no evidence either way, which leaves it
+	// still presumed down. An outcome added later has to say so to
+	// be treated as recovery - silence gets the safe default.
+	recovered := false
 	switch o {
 	case healthy:
-		// The service answered. Whatever run was building is over.
 		b.failures = 0
+		recovered = true
 	case unwell:
 		b.failures++
 	case ignore:
 		// Tells us nothing, so the run stands: neither extended nor
-		// cleared. The clock below still moves if this spent a probe.
+		// cleared.
 	}
 
-	// Re-arm when the circuit is open or has just opened, and when a
-	// probe came back without proving recovery - an inconclusive
-	// probe leaves the dependency still presumed down, so the next
-	// caller waits out another cooldown rather than being handed the
-	// slot immediately.
+	// A probe that did not prove recovery spends its slot and costs a
+	// full cooldown. Without this an open circuit hands a fresh probe
+	// to every caller the moment the first one reports back.
+	if probe && !recovered {
+		b.openedAt = time.Now()
+		return
+	}
+
+	// A failure moves the clock so the cooldown is measured from the
+	// last one rather than the first.
 	//
 	// >= not ==: requests already in flight when the breaker tripped
-	// land afterwards, and with == their failures would not move the
-	// clock, so the cooldown would be measured from the first trip
-	// and expire early.
-	if o != healthy && (b.failures >= b.FailedRequests || probe) {
+	// land afterwards, and with == their failures would not move it,
+	// so the cooldown would expire early.
+	if o == unwell && b.failures >= b.FailedRequests {
 		b.openedAt = time.Now()
 	}
 }
