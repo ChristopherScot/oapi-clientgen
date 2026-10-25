@@ -287,7 +287,7 @@ func TestBackoffStopsWhenTheCallerGivesUp(t *testing.T) {
 func TestHalfOpenReleasesOneProbe(t *testing.T) {
 	b := &Breaker{Threshold: 3, Cooldown: 10 * time.Millisecond}
 	for i := 0; i < 3; i++ {
-		b.record(true)
+		b.record(unwell)
 	}
 	if b.allow() {
 		t.Fatal("breaker should be open immediately after tripping")
@@ -316,13 +316,13 @@ func TestHalfOpenReleasesOneProbe(t *testing.T) {
 // starts again rather than letting the next caller straight through.
 func TestFailedProbeReArmsTheCooldown(t *testing.T) {
 	b := &Breaker{Threshold: 1, Cooldown: 10 * time.Millisecond}
-	b.record(true)
+	b.record(unwell)
 	time.Sleep(20 * time.Millisecond)
 
 	if !b.allow() {
 		t.Fatal("the probe should have been released after the cooldown")
 	}
-	b.record(true) // the probe failed
+	b.record(unwell) // the probe failed
 
 	if b.allow() {
 		t.Error("a failed probe must re-arm the cooldown, not reopen the gate")
@@ -335,12 +335,12 @@ func TestFailedProbeReArmsTheCooldown(t *testing.T) {
 func TestLateFailureMovesTheCooldown(t *testing.T) {
 	b := &Breaker{Threshold: 3, Cooldown: time.Hour}
 	for i := 0; i < 3; i++ {
-		b.record(true)
+		b.record(unwell)
 	}
 	first := b.openedAt
 
 	time.Sleep(5 * time.Millisecond)
-	b.record(true)
+	b.record(unwell)
 
 	if b.openedAt.Equal(first) {
 		t.Error("openedAt did not move on a failure after the trip")
@@ -544,5 +544,127 @@ func TestServerErrorsStillTripTheBreaker(t *testing.T) {
 
 	if b.allow() {
 		t.Error("two 500s should have opened the circuit")
+	}
+}
+
+// Our own per-attempt Timeout firing is NOT the caller giving up. A
+// service too slow to answer within it is unwell, which is a case the
+// breaker exists for - and both situations surface as
+// context.DeadlineExceeded, so the error alone cannot tell them
+// apart.
+func TestAHungDependencyStillTripsTheBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{
+		Breaker: b,
+		Policy:  NoRetry{},
+		Timeout: 20 * time.Millisecond,
+	})
+	for i := 0; i < 3; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if b.allow() {
+		t.Error("a dependency that never answers did not trip the breaker")
+	}
+}
+
+// "Tells us nothing" is not "went fine". A service answering 500 on
+// one route and 501 on another is still down, but if the 501s reset
+// the count the 500s built up, the circuit never opens.
+func TestAnIgnoredOutcomeDoesNotEraseRealFailures(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if n.Add(1)%2 == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{Threshold: 3, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	for i := 0; i < 20; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if b.allow() {
+		t.Error("ten 500s did not open the circuit; the interleaved 501s erased them")
+	}
+}
+
+// A success still clears the run: that is what tells the breaker the
+// service came back.
+func TestASuccessClearsTheFailureRun(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if n.Add(1) <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{Threshold: 3, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	for i := 0; i < 4; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if !b.allow() {
+		t.Error("two 500s followed by successes should have cleared the run")
+	}
+}
+
+// A permanently unimplemented route does not become implemented on
+// the next attempt, so retrying it only spends the budget.
+func TestPermanentProtocolErrorsAreNotRetried(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a 501 will not become a 200", attempts)
 	}
 }

@@ -69,16 +69,43 @@ export interface ClientOptions {
  * cooldown, so counting them leaves the breaker open forever against
  * a service working exactly as built.
  */
-function dependencyFailed(res: Response | undefined, err: unknown): boolean {
+/** What one request says about the service's health.
+ *
+ *  Three values, not two: "this tells us nothing" is different from
+ *  "this went fine". A breaker that treats them alike lets an ignored
+ *  outcome ERASE a run of real failures - a service answering 500 on
+ *  one route and 501 on another never trips, because each 501 zeroes
+ *  the count the 500s built up.
+ *
+ *  sony/gobreaker draws the same three-way line: a success clears the
+ *  consecutive-failure count, a failure increments it, and an
+ *  exclusion touches neither. */
+export type Outcome = 'healthy' | 'unwell' | 'ignore'
+
+/** A permanent statement about THIS REQUEST rather than evidence
+ *  about the service: the route is not implemented (501), or the
+ *  HTTP version is not spoken (505). Neither changes after a
+ *  cooldown, so neither is worth a retry or a place in the count. */
+function permanentProtocolError(status: number): boolean {
+  return status === 501 || status === 505
+}
+
+function classify(
+  res: Response | undefined,
+  err: unknown,
+  caller: AbortSignal | undefined
+): Outcome {
   if (err !== undefined) {
-    // fetch reports both an AbortController and an AbortSignal
-    // timeout this way.
-    return !(err instanceof DOMException && err.name === 'AbortError') &&
-      !(err instanceof Error && err.name === 'TimeoutError')
+    // Whose signal aborted? Our own per-attempt timeout arrives as
+    // an abort too, and a service too slow to answer within it IS
+    // unwell - that is a case the breaker exists for. So the
+    // question is not what the error says, it is whether the
+    // CALLER's signal is the one that fired.
+    return caller?.aborted === true ? 'ignore' : 'unwell'
   }
-  if (res === undefined) return false
-  if (res.status === 501 || res.status === 505) return false
-  return res.status >= 500
+  if (res === undefined) return 'ignore'
+  if (permanentProtocolError(res.status)) return 'ignore'
+  return res.status >= 500 ? 'unwell' : 'healthy'
 }
 
 /** A backoff that a caller can cut short. Rejects with the signal's
@@ -104,7 +131,11 @@ const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'])
 function retryable(req: Request, res: Response | undefined, err: unknown): boolean {
   if (!IDEMPOTENT.has(req.method)) return false
   if (err !== undefined) return true
-  return res !== undefined && (res.status === 429 || res.status >= 500)
+  if (res === undefined) return false
+  // Same carve-out the breaker makes: a permanently unimplemented
+  // route does not become implemented on the next attempt.
+  if (permanentProtocolError(res.status)) return false
+  return res.status === 429 || res.status >= 500
 }
 
 // One retry, a second later. The default.
@@ -195,11 +226,14 @@ export class Breaker {
     return false
   }
 
-  record(failed: boolean): void {
+  record(o: Outcome): void {
+    // Taken back before the ignore branch returns: a probe that is
+    // never returned wedges the breaker closed for good.
     const probe = this.#probing
     this.#probing = false
 
-    if (!failed) {
+    if (o === 'ignore') return
+    if (o === 'healthy') {
       this.#failures = 0
       return
     }
@@ -290,7 +324,7 @@ export function createResilientFetch({
       }
 
     } finally {
-      breaker?.record(dependencyFailed(res, err))
+      breaker?.record(classify(res, err, caller))
     }
 
     if (err !== undefined) throw err
