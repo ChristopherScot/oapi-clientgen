@@ -1,0 +1,129 @@
+# Cross-compiles and publishes release assets, named to match what the
+# generated `update` command looks for. Triggered by a VERSION change so a
+# release is deliberate - but tests run on every push and PR, or a CLI repo
+# would only ever be tested at release time.
+name: oapiclient-gen
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # make test, not the commands themselves: the Makefile says it
+      # runs "what CI runs", and that is only true if this IS it. Two
+      # copies of the same command drift, and the one that drifts is
+      # whichever nobody is looking at.
+      - name: Test
+        run: make test
+
+      - name: Build
+        run: make build
+
+  release:
+    # Every push to main, and any manual run; the step below
+    # decides whether there is actually a new version to publish.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ask GitHub whether this version is already released, instead of
+      # predicting from git history whether it ought to be.
+      #
+      # The old gate was `git diff --name-only HEAD~1 HEAD | grep -qx VERSION`
+      # and it was wrong three separate times: the path never matched in a
+      # monorepo, HEAD~1 does not resolve on a first commit, and a
+      # workflow_dispatch run is not a push. All three failed the same way -
+      # the gate stayed shut, no release was cut, and nothing said so, because
+      # a gate that does not open looks exactly like a commit that did not bump
+      # the version.
+      #
+      # Asking the registry has none of those cases. There is no history to
+      # walk, so there is nothing to get wrong about the shape of it, and a
+      # false negative cannot persist: if the release is missing, the next push
+      # to main cuts it. This is how Clever's wag does it - attempt the
+      # release, treat "already exists" as success.
+      - name: Release unless this version is already published
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(head -n1 VERSION)
+          tag="$version"
+          # Only a definite 404 means "not released yet". An auth
+          # failure, a network blip or any other API error also exits
+          # non-zero, and treating those as not-found would re-release a
+          # version that already exists - and because
+          # softprops/action-gh-release UPDATES an existing release
+          # rather than failing, that silently overwrites published
+          # assets under a tag people have already installed. A
+          # transient error would become a bad release that nothing
+          # reports. So anything that is not a clean yes or a clean 404
+          # fails the job.
+          if out=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" 2>&1); then
+            echo "release already exists for $tag"
+            go=false
+          elif printf '%s' "$out" | grep -q '"message": *"Not Found"'; then
+            echo "no release for $tag yet"
+            go=true
+          else
+            echo "could not determine whether $tag is released:" >&2
+            printf '%s\n' "$out" >&2
+            exit 1
+          fi
+          echo "go=$go" >> $GITHUB_OUTPUT
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - uses: actions/setup-go@v5
+        if: steps.gate.outputs.go == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      # Asset names must match what `oapiclient-gen update` looks for:
+      # oapiclient-gen_<goos>_<goarch>.tar.gz containing the bare binary.
+      # Version is injected here; without it a released binary reports
+      # "dev" and refuses to update itself.
+      - name: Cross-compile
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          VERSION="${{ steps.gate.outputs.version }}"
+          LDFLAGS="-s -w -X main.Version=$VERSION"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            mkdir -p "dist/$GOOS/$GOARCH"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" -o "dist/$GOOS/$GOARCH/oapiclient-gen" .
+            tar -czf "oapiclient-gen_${GOOS}_${GOARCH}.tar.gz" -C "dist/$GOOS/$GOARCH" "oapiclient-gen"
+          done
+          sha256sum oapiclient-gen_*.tar.gz > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.gate.outputs.go == 'true'
+        with:
+          # Prefixed in a monorepo, because releases are per REPOSITORY
+          # and the siblings each cut their own. Sharing one namespace
+          # made `latest` mean "whichever service released last", and
+          # two services reaching the same number attached their assets
+          # to ONE release where the second checksums.txt overwrote the
+          # first. A dedicated repo has one release line, so no prefix.
+          tag_name: ${{ steps.gate.outputs.version }}
+          files: |
+            oapiclient-gen_*.tar.gz
+            checksums.txt
