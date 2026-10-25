@@ -25,7 +25,7 @@ import (
 // SYSTEM (one retry, not five: five can mean five times the traffic to
 // something already struggling).
 //
-//	c, err := api.NewClient(url, api.WithClient(api.NewHTTPClient(api.HTTPOptions{})))
+//	c, err := api.New(url, api.HTTPOptions{})
 
 // ClientVersion tracks the spec's info.version and is sent on every
 // request so a server can see which client versions still call it.
@@ -86,6 +86,15 @@ func retryable(req *http.Request, resp *http.Response, err error) bool {
 	switch req.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
 	default:
+		return false
+	}
+	// A body we cannot rewind cannot be sent twice. net/http fills in
+	// GetBody for the readers it knows - strings.Reader, bytes.Reader,
+	// bytes.Buffer - and http.Client.Do replays from it, which is why
+	// an ordinary PUT retries correctly. A caller that hands over an
+	// opaque io.Reader gets no GetBody, and a second attempt would
+	// send an empty body under the original Content-Length.
+	if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
 		return false
 	}
 	if err != nil {
@@ -183,6 +192,21 @@ func NewHTTPClient(o HTTPOptions) *HTTPClient {
 		maxRetryAfter: o.MaxRetryAfter,
 		name:          o.Name,
 	}
+}
+
+// New is the constructor a caller should reach for: it installs the
+// resilience above, so the zero HTTPOptions gives a 5s timeout, one
+// retry on idempotent methods, and Retry-After obeyed.
+//
+//	c, err := api.New(url, api.HTTPOptions{})
+//	c, err := api.New(url, api.HTTPOptions{Policy: api.ExponentialRetry{}})
+//
+// NewClient, which ogen generates, installs none of it - its default
+// is http.DefaultClient, which has NO timeout. It stays reachable for
+// a caller that wants a different transport entirely, but it is not
+// the one to reach for.
+func New(serverURL string, o HTTPOptions{{ if .HasSecurity }}, sec SecuritySource{{ end }}) (*Client, error) {
+	return NewClient(serverURL, {{ if .HasSecurity }}sec, {{ end }}WithClient(NewHTTPClient(o)))
 }
 
 // retryAfter reads the server's own answer. RFC 9110 allows either a

@@ -133,3 +133,53 @@ func TestEveryRewrittenFileSaysItIsGenerated(t *testing.T) {
 		}
 	}
 }
+
+// ogen's NewClient takes a SecuritySource before its options exactly
+// when the spec declares securitySchemes. Our constructor wraps it, so
+// it has to render the matching signature - pokedex declares none and
+// Zoom declares one, so both shapes ship.
+func TestGoConstructorMatchesOgensSignature(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		hasSecurity bool
+		wantSig     string
+		wantCall    string
+	}{
+		{
+			name:     "no securitySchemes",
+			wantSig:  "func New(serverURL string, o HTTPOptions) (*Client, error)",
+			wantCall: "return NewClient(serverURL, WithClient(NewHTTPClient(o)))",
+		},
+		{
+			name:        "with securitySchemes",
+			hasSecurity: true,
+			wantSig:     "func New(serverURL string, o HTTPOptions, sec SecuritySource) (*Client, error)",
+			wantCall:    "return NewClient(serverURL, sec, WithClient(NewHTTPClient(o)))",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := Go(Params{
+				Name: "x", Version: "1.0.0", Package: "api",
+				ImportPath: "example.com/x", HasSecurity: tc.hasSecurity,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var client string
+			for _, f := range files {
+				if f.Path == "client.go" {
+					client = f.Body
+				}
+			}
+			if client == "" {
+				t.Fatal("no client.go")
+			}
+			if !strings.Contains(client, tc.wantSig) {
+				t.Errorf("missing signature:\n  want %s", tc.wantSig)
+			}
+			if !strings.Contains(client, tc.wantCall) {
+				t.Errorf("missing call:\n  want %s", tc.wantCall)
+			}
+		})
+	}
+}

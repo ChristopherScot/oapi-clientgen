@@ -61,6 +61,13 @@ type Params struct {
 	// generated it.
 	ImportPath string
 
+	// HasSecurity says the spec declares securitySchemes, which makes
+	// ogen's NewClient take a SecuritySource before its options. Our
+	// own constructor has to match that signature or it will not
+	// compile for such a spec - and pokedex has none while Zoom has
+	// one, so both shapes are real.
+	HasSecurity bool
+
 	// Published says this client ships as an npm package of its own,
 	// with its own tsconfig.
 	//
