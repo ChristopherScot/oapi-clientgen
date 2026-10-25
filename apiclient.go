@@ -258,14 +258,6 @@ func RemoveRetired(dir string) ([]string, error) {
 	return removed, nil
 }
 
-// GeneratedHeader is prepended to every file a generator writes.
-//
-// Lint has to be told to skip generated code, and the repos consuming
-// these clients tell it inline rather than through .eslintignore -
-// because naming an ignored file on an eslint command line makes it
-// warn "File ignored", and a CI step that lints CHANGED files does
-// exactly that the first time generated code changes. An ignore entry
-// turns a passing build red; a header in the file does not.
 // generatedMarker is the phrase that says a file came from here.
 //
 // Deliberately just the phrase, not the sentence that follows it. The
@@ -297,24 +289,32 @@ const generatedNotice = generatedMarker + ". Do not edit: `homelabctl regen` and
 	"`client generate` rewrite this file, so edits are lost silently.\n" +
 	"Change the template in homelabctl instead."
 
-// Header returns the generated-file header as line comments, each
-// prefixed with lead, ending in a blank line.
+// Header returns the generated-file notice as line comments, each
+// prefixed with comment and terminated by a newline. It adds no blank
+// line after: a template that wants one writes it, and the TypeScript
+// templates deliberately run the next comment straight on.
 //
 // Templates call this as {{ "{{ header `//` }}" }} rather than
-// spelling the notice out, so the wording has one home. lead is the
-// language's line-comment token, because that is the only part that
-// differs between a .go and a .ts file.
-func Header(lead string) string {
+// spelling the notice out, so the wording has one home. comment is
+// the language's line-comment token, because that is the only part
+// that differs between a .go and a .ts file.
+func Header(comment string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(generatedNotice, "\n") {
-		b.WriteString(lead)
-		b.WriteString(" ")
-		b.WriteString(line)
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "%s %s\n", comment, line)
 	}
 	return b.String()
 }
 
+// GeneratedHeader is what MarkGenerated prepends to hey-api's own
+// output - the same notice as Header, behind an eslint pragma.
+//
+// Lint has to be told to skip generated code, and the repos consuming
+// these clients tell it inline rather than through .eslintignore -
+// because naming an ignored file on an eslint command line makes it
+// warn "File ignored", and a CI step that lints CHANGED files does
+// exactly that the first time generated code changes. An ignore entry
+// turns a passing build red; a header in the file does not.
 func GeneratedHeader() string { return "/* eslint-disable */\n" + Header("//") }
 
 // MarkGenerated prepends GeneratedHeader to every file under dir that
