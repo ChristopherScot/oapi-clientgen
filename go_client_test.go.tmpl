@@ -42,7 +42,7 @@ func TestRetryIsBoundedAndBreakerOpens(t *testing.T) {
 
 	c := NewHTTPClient(HTTPOptions{
 		Policy:  NoRetry{},
-		Breaker: &Breaker{Threshold: 3, Cooldown: time.Minute},
+		Breaker: &Breaker{FailedRequests: 3, Cooldown: time.Minute},
 	})
 	var opened int
 	for i := 0; i < 5; i++ {
@@ -285,7 +285,7 @@ func TestBackoffStopsWhenTheCallerGivesUp(t *testing.T) {
 // blocked set at something that has just proved it is struggling -
 // the stampede the breaker exists to prevent.
 func TestHalfOpenReleasesOneProbe(t *testing.T) {
-	b := &Breaker{Threshold: 3, Cooldown: 10 * time.Millisecond}
+	b := &Breaker{FailedRequests: 3, Cooldown: 10 * time.Millisecond}
 	for i := 0; i < 3; i++ {
 		b.record(unwell)
 	}
@@ -315,7 +315,7 @@ func TestHalfOpenReleasesOneProbe(t *testing.T) {
 // A failed probe means the dependency is still down, so the cooldown
 // starts again rather than letting the next caller straight through.
 func TestFailedProbeReArmsTheCooldown(t *testing.T) {
-	b := &Breaker{Threshold: 1, Cooldown: 10 * time.Millisecond}
+	b := &Breaker{FailedRequests: 1, Cooldown: 10 * time.Millisecond}
 	b.record(unwell)
 	time.Sleep(20 * time.Millisecond)
 
@@ -333,7 +333,7 @@ func TestFailedProbeReArmsTheCooldown(t *testing.T) {
 // their failures without moving openedAt measures the cooldown from
 // the first trip, so it expires early.
 func TestLateFailureMovesTheCooldown(t *testing.T) {
-	b := &Breaker{Threshold: 3, Cooldown: time.Hour}
+	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
 	for i := 0; i < 3; i++ {
 		b.record(unwell)
 	}
@@ -428,7 +428,7 @@ func TestCancelledProbeDoesNotWedgeTheBreaker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{Threshold: 1, Cooldown: 10 * time.Millisecond}
+	b := &Breaker{FailedRequests: 1, Cooldown: 10 * time.Millisecond}
 	c := NewHTTPClient(HTTPOptions{Breaker: b})
 
 	// Trip it.
@@ -471,7 +471,7 @@ func TestCancellationIsNotADependencyFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
 	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
 
 	for i := 0; i < 3; i++ {
@@ -502,7 +502,7 @@ func TestPermanentProtocolErrorsAreNotDependencyFailures(t *testing.T) {
 			w.WriteHeader(status)
 		}))
 
-		b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+		b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
 		c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
 		for i := 0; i < 3; i++ {
 			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -529,7 +529,7 @@ func TestServerErrorsStillTripTheBreaker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
 	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
 	for i := 0; i < 2; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -559,7 +559,7 @@ func TestAHungDependencyStillTripsTheBreaker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
 	c := NewHTTPClient(HTTPOptions{
 		Breaker: b,
 		Policy:  NoRetry{},
@@ -595,7 +595,7 @@ func TestAnIgnoredOutcomeDoesNotEraseRealFailures(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{Threshold: 3, Cooldown: time.Hour}
+	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
 	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
 	for i := 0; i < 20; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -626,7 +626,7 @@ func TestASuccessClearsTheFailureRun(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{Threshold: 3, Cooldown: time.Hour}
+	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
 	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
 	for i := 0; i < 4; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -666,5 +666,25 @@ func TestPermanentProtocolErrorsAreNotRetried(t *testing.T) {
 
 	if attempts != 1 {
 		t.Errorf("attempts = %d, want 1: a 501 will not become a 200", attempts)
+	}
+}
+
+// An inconclusive probe still spends the slot. Without re-arming,
+// the cooldown has already elapsed when the probe reports back, so
+// the next caller is handed another probe immediately - and an open
+// circuit stops throttling precisely when the callers most likely to
+// cancel are the ones waiting on it.
+func TestAnIgnoredProbeStillCostsACooldown(t *testing.T) {
+	b := &Breaker{FailedRequests: 1, Cooldown: 50 * time.Millisecond}
+	b.record(unwell)
+	time.Sleep(60 * time.Millisecond)
+
+	if !b.allow() {
+		t.Fatal("the probe should have been released after the cooldown")
+	}
+	b.record(ignore) // it told us nothing
+
+	if b.allow() {
+		t.Error("a second probe was released immediately; the open circuit is not throttling")
 	}
 }

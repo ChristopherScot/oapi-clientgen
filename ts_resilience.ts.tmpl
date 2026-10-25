@@ -58,17 +58,6 @@ export interface ClientOptions {
   maxRetryAfterMs?: number
 }
 
-/**
- * Whether this outcome is evidence that the SERVICE is unwell, which
- * is the only thing a breaker should count.
- *
- * Two things look like failures and are not. An abort says the
- * caller changed its mind - counting those meant a few impatient
- * taps opened the circuit against a server answering fine. And 501
- * and 505 are permanent protocol answers: neither recovers after a
- * cooldown, so counting them leaves the breaker open forever against
- * a service working exactly as built.
- */
 /** What one request says about the service's health.
  *
  *  Three values, not two: "this tells us nothing" is different from
@@ -200,20 +189,19 @@ export class Breaker {
   #failures = 0
   #probing = false
   #openedAt = 0
-  readonly threshold: number
+  readonly failedRequests: number
   readonly cooldownMs: number
 
-  /** threshold counts REQUESTS, not attempts: record() runs once per
-   *  call, so a request that burned every retry and still failed
-   *  counts as one. Size it in requests and read the policy for what
-   *  each one costs. */
-  constructor(threshold = 5, cooldownMs = 30_000) {
-    this.threshold = threshold
+  /** failedRequests is how many consecutive failed REQUESTS open the
+   *  circuit. A request that exhausted its retries counts once, so
+   *  the number of round trips behind it depends on the policy. */
+  constructor(failedRequests = 5, cooldownMs = 30_000) {
+    this.failedRequests = failedRequests
     this.cooldownMs = cooldownMs
   }
 
   allow(): boolean {
-    if (this.#failures < this.threshold) return true
+    if (this.#failures < this.failedRequests) return true
     // Open. One caller past the cooldown gets through to find out
     // whether the dependency is back; everyone else waits for its
     // verdict rather than joining it. Zeroing the count here instead
@@ -232,7 +220,14 @@ export class Breaker {
     const probe = this.#probing
     this.#probing = false
 
-    if (o === 'ignore') return
+    if (o === 'ignore') {
+      // An inconclusive probe still spends the slot. We learned
+      // nothing, so the dependency is still presumed down - and
+      // without re-arming, the cooldown has already elapsed, so the
+      // next caller gets another probe, and the next.
+      if (probe) this.#openedAt = Date.now()
+      return
+    }
     if (o === 'healthy') {
       this.#failures = 0
       return
@@ -242,7 +237,7 @@ export class Breaker {
     // land afterwards, and with === their failures would not move the
     // clock, so the cooldown would expire early. A failed probe
     // re-arms it - the dependency is still down.
-    if (this.#failures >= this.threshold || probe) this.#openedAt = Date.now()
+    if (this.#failures >= this.failedRequests || probe) this.#openedAt = Date.now()
   }
 }
 

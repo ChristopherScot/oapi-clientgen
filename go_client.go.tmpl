@@ -190,16 +190,14 @@ func permanentProtocolError(status int) bool {
 // behind a timeout it is going to hit anyway.
 var ErrCircuitOpen = errors.New("circuit open")
 
-// Breaker trips after Threshold consecutive failures and lets one
-// request through every Cooldown to probe recovery.
+// Breaker trips after FailedRequests consecutive failures and lets
+// one request through every Cooldown to probe recovery.
 type Breaker struct {
-	// Threshold counts REQUESTS, not attempts. record() runs once per
-	// Do, so a request that burned six attempts under ExponentialRetry
-	// and still failed counts as one. Threshold: 3 therefore tolerates
-	// up to eighteen failed round trips before opening - size it in
-	// requests and read Policy for what each one costs.
-	Threshold int
-	Cooldown  time.Duration
+	// FailedRequests is how many consecutive failed REQUESTS open the
+	// circuit. A request that exhausted its retries counts once, so
+	// the number of round trips behind it depends on Policy.
+	FailedRequests int
+	Cooldown       time.Duration
 
 	mu       sync.Mutex
 	failures int
@@ -215,7 +213,7 @@ type Breaker struct {
 func (b *Breaker) allow() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.failures < b.Threshold {
+	if b.failures < b.FailedRequests {
 		return true
 	}
 	// Open. One caller past the cooldown gets through to find out
@@ -228,6 +226,13 @@ func (b *Breaker) allow() bool {
 	return false
 }
 
+// record is the other half of allow, and every path through it has
+// to leave two things true: the probe slot is back, and the clock is
+// in a state that bounds the next probe. Clearing the run does the
+// second implicitly; so does arming openedAt. An outcome that does
+// NEITHER - which is what ignore was when it was added - leaves an
+// open circuit with an elapsed cooldown, handing a fresh probe to
+// every caller that asks.
 func (b *Breaker) record(o outcome) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -237,6 +242,15 @@ func (b *Breaker) record(o outcome) {
 	b.probing = false
 
 	if o == ignore {
+		// An inconclusive probe still spends the slot. We learned
+		// nothing, so the dependency is still presumed down - and
+		// without re-arming, the cooldown has already elapsed, so
+		// the next caller gets another probe, and the next. An open
+		// circuit would stop throttling exactly when the callers
+		// most likely to cancel are the ones waiting on it.
+		if probe {
+			b.openedAt = time.Now()
+		}
 		return
 	}
 	if o == healthy {
@@ -249,7 +263,7 @@ func (b *Breaker) record(o outcome) {
 	// clock, so the cooldown would be measured from the first trip
 	// and expire early. A failed probe re-arms it for the same
 	// reason - the dependency is still down.
-	if b.failures >= b.Threshold || probe {
+	if b.failures >= b.FailedRequests || probe {
 		b.openedAt = time.Now()
 	}
 }
