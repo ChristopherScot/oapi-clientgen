@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherScot/homelabctl/internal/apiclient"
@@ -28,6 +30,7 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("no node")
 	}
+	requireNode(t, 24)
 
 	dir := t.TempDir()
 
@@ -82,6 +85,32 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("node --test in %s: %v\n%s", dir, err, indent(string(out)))
+	}
+}
+
+// requireNode fails unless node is at least major, which is the floor
+// the generated services declare in their own package.json.
+//
+// Stated rather than assumed, because an older runtime does not fail
+// honestly here. It runs the suite, reports zero failures, and marks
+// five tests "cancelledByParent" - which reads as a bug in this
+// harness rather than a toolchain that cannot run what it was given.
+// CI had no setup-node step and silently used whatever the runner
+// image shipped.
+func requireNode(t *testing.T, major int) {
+	t.Helper()
+	out, err := exec.Command("node", "--version").Output()
+	if err != nil {
+		t.Fatalf("node --version: %v", err)
+	}
+	v := strings.TrimSpace(string(out))
+	n, err := strconv.Atoi(strings.SplitN(strings.TrimPrefix(v, "v"), ".", 2)[0])
+	if err != nil {
+		t.Fatalf("could not read a major version from %q", v)
+	}
+	if n < major {
+		t.Fatalf("node %s is too old: the generated client needs >=%d, "+
+			"which is the engines floor its own package.json declares", v, major)
 	}
 }
 
