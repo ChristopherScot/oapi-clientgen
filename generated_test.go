@@ -51,14 +51,19 @@ func TestTheGeneratedTestsPass(t *testing.T) {
 	mustRun(t, dir, "go", "run", codegen.OgenCommand(),
 		"--target", api, "--clean", "--package", "api", spec)
 
-	files, err := apiclient.Go(apiclient.Params{
+	p := apiclient.Params{
 		Name: "probe", Version: "1.0.0", Package: "api",
 		ImportPath: "example.com/probe/api",
-	})
+	}
+	client, err := apiclient.Go(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range files {
+	tests, err := apiclient.GoTests(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range append(client, tests...) {
 		if err := os.WriteFile(filepath.Join(api, f.Path), []byte(f.Body), 0o644); err != nil {
 			t.Fatal(err)
 		}
