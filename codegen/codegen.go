@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ChristopherScot/homelabctl/internal/apiclient"
+	"github.com/ChristopherScot/oapiclient-gen/apiclient"
 )
 
 // OgenVersion is the ogen release every generated Go client is built

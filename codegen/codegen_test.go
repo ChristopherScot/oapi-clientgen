@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherScot/homelabctl/internal/apiclient"
+	"github.com/ChristopherScot/oapiclient-gen/apiclient"
 )
 
 // configPaths pulls input and output.path back out of a generated

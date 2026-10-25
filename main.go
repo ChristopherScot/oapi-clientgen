@@ -22,11 +22,17 @@ var Version = "dev"
 
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:          "oapiclient-gen",
-		Short:        "oapiclient-gen",
+		Use:   "oapiclient-gen",
+		Short: "generate typed clients from an OpenAPI spec",
+		Long: `Generate typed Go and TypeScript clients from an OpenAPI spec,
+with a transport that already does timeouts, retries, Retry-After and
+circuit breaking.
+
+Declare clients in clients.yaml and run with no arguments, or point
+--spec at one spec to try it without committing to anything.`,
 		SilenceUsage: true,
 	}
-	root.AddCommand(updateCmd(), versionCmd())
+	root.AddCommand(clientGenerateCmd(), clientListCmd(), updateCmd(), versionCmd())
 
 	// Cobra builds `completion` during Execute, so force it to exist now
 	// and hang `install` off it.
