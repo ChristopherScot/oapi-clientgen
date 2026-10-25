@@ -241,18 +241,24 @@ func (b *Breaker) record(o outcome) {
 	probe := b.probing
 	b.probing = false
 
-	// recovered says the dependency answered, which is the only
-	// evidence that it is back. A failure is evidence against; an
-	// inconclusive answer is no evidence either way, which leaves it
-	// still presumed down. An outcome added later has to say so to
-	// be treated as recovery - silence gets the safe default.
-	recovered := false
+	// Each outcome declares what it PROVED, and the clock below reads
+	// those rather than the outcome's name. An outcome added later
+	// has to say so to count as recovery or as a failure, and
+	// silence gets the conservative answer on both.
+	//
+	// Keyed on the name instead, a second success-like outcome would
+	// arm the clock on a breaker that had just recovered, and a
+	// failure-like one would extend the run without moving the
+	// cooldown - which is the early-expiry bug the >= below exists
+	// to prevent, arriving from the other side.
+	recovered, extended := false, false
 	switch o {
 	case healthy:
 		b.failures = 0
 		recovered = true
 	case unwell:
 		b.failures++
+		extended = true
 	case ignore:
 		// Tells us nothing, so the run stands: neither extended nor
 		// cleared.
@@ -272,7 +278,7 @@ func (b *Breaker) record(o outcome) {
 	// >= not ==: requests already in flight when the breaker tripped
 	// land afterwards, and with == their failures would not move it,
 	// so the cooldown would expire early.
-	if o == unwell && b.failures >= b.FailedRequests {
+	if extended && b.failures >= b.FailedRequests {
 		b.openedAt = time.Now()
 	}
 }

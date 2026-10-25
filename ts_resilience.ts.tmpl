@@ -219,12 +219,12 @@ export class Breaker {
     const probe = this.#probing
     this.#probing = false
 
-    // recovered says the dependency answered, which is the only
-    // evidence it is back. A failure is evidence against; an
-    // inconclusive answer is no evidence either way. An outcome
-    // added later has to say so to count as recovery - silence gets
-    // the safe default.
+    // Each outcome declares what it PROVED, and the clock below
+    // reads those rather than the outcome's name. An outcome added
+    // later has to say so to count as recovery or as a failure, and
+    // silence gets the conservative answer on both.
     let recovered = false
+    let extended = false
     switch (o) {
       case 'healthy':
         this.#failures = 0
@@ -232,6 +232,7 @@ export class Breaker {
         break
       case 'unwell':
         this.#failures++
+        extended = true
         break
       case 'ignore':
         // Tells us nothing, so the run stands.
@@ -252,7 +253,7 @@ export class Breaker {
     // >= not ===: requests already in flight when the breaker
     // tripped land afterwards, and with === their failures would not
     // move it, so the cooldown would expire early.
-    if (o === 'unwell' && this.#failures >= this.failedRequests) {
+    if (extended && this.#failures >= this.failedRequests) {
       this.#openedAt = Date.now()
     }
   }
