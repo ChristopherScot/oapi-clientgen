@@ -57,6 +57,23 @@ export interface ClientOptions {
   maxRetryAfterMs?: number
 }
 
+/** A backoff that a caller can cut short. Rejects with the signal's
+ *  own reason, so an aborted call fails the way fetch would have. */
+function abortableDelay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(signal.reason)
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal?.reason)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 // A POST may already have applied, so retrying it can create a second thing.
 const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'])
 
@@ -118,6 +135,7 @@ export class CircuitOpenError extends Error {
 
 export class Breaker {
   #failures = 0
+  #probing = false
   #openedAt = 0
   readonly threshold: number
   readonly cooldownMs: number
@@ -129,25 +147,35 @@ export class Breaker {
 
   allow(): boolean {
     if (this.#failures < this.threshold) return true
-    if (Date.now() - this.#openedAt > this.cooldownMs) {
-      this.#failures = 0 // half-open: one probe decides whether to close
+    // Open. One caller past the cooldown gets through to find out
+    // whether the dependency is back; everyone else waits for its
+    // verdict rather than joining it. Zeroing the count here instead
+    // would release every waiting caller at something that has just
+    // proved it is struggling.
+    if (!this.#probing && Date.now() - this.#openedAt > this.cooldownMs) {
+      this.#probing = true
       return true
     }
     return false
   }
 
   record(failed: boolean): void {
+    const probe = this.#probing
+    this.#probing = false
+
     if (!failed) {
       this.#failures = 0
       return
     }
     this.#failures++
-    if (this.#failures === this.threshold) this.#openedAt = Date.now()
+    // >= not ===: requests already in flight when the breaker tripped
+    // land afterwards, and with === their failures would not move the
+    // clock, so the cooldown would expire early. A failed probe
+    // re-arms it - the dependency is still down.
+    if (this.#failures >= this.threshold || probe) this.#openedAt = Date.now()
   }
 }
 
-/** A configured transport for the generated operations. Pass it as
- *  `{ client }` to any of them. */
 /**
  * The transport on its own: a `fetch` that times out, retries, obeys
  * Retry-After and trips a breaker.
@@ -174,6 +202,10 @@ export function createResilientFetch({
 }: Omit<ClientOptions, 'baseUrl'> = {}) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init)
+    // Read off init rather than req.signal: Request always has one,
+    // so req.signal cannot tell "the caller passed a signal" from
+    // "the caller did not".
+    const caller = init?.signal ?? undefined
     req.headers.set(ClientVersionHeader, ClientVersion)
     if (name) req.headers.set(ClientNameHeader, name)
 
@@ -186,7 +218,14 @@ export function createResilientFetch({
     for (let attempt = 0; ; attempt++) {
       err = undefined
       try {
-        res = await fetch(req.clone(), { signal: AbortSignal.timeout(timeoutMs) })
+        // The caller's own signal is combined with the per-attempt
+        // timeout rather than replaced by it: a caller that aborts
+        // must stop the whole call, not just lose one attempt.
+        res = await fetch(req.clone(), {
+          signal: caller
+            ? AbortSignal.any([caller, AbortSignal.timeout(timeoutMs)])
+            : AbortSignal.timeout(timeoutMs),
+        })
       } catch (e) {
         err = e
         res = undefined
@@ -196,7 +235,10 @@ export function createResilientFetch({
       // The server's Retry-After wins over the policy's backoff.
       const after = retryAfterMs(res, maxRetryAfterMs)
       const wait = after ?? backoffs[attempt]
-      await new Promise((r) => setTimeout(r, wait))
+      // Wait, unless the caller has already given up. A bare
+      // setTimeout would hold the backoff for the server's full
+      // Retry-After and then retry on behalf of nobody.
+      await abortableDelay(wait, caller)
     }
 
     breaker?.record(err !== undefined || (res !== undefined && res.status >= 500))
@@ -212,6 +254,14 @@ export function createResilientFetch({
   }
 }
 
+/** A configured transport for the generated operations. Pass it as
+ *  `{ client }` to any of them.
+ *
+ *  Most callers do not need this: the operations fall back to a
+ *  module-level client, and a consumer that configures THAT one -
+ *  with createResilientFetch - gets the same behaviour without
+ *  naming a client at every call. Reach for this to run several
+ *  clients with different policies, or against different hosts. */
 export function createClient({ baseUrl, ...options }: ClientOptions) {
   const resilientFetch = createResilientFetch(options)
 

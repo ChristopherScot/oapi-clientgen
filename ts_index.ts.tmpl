@@ -4,13 +4,16 @@
 // The package entry: generated operations plus the transport that
 // carries the retries, timeout and circuit breaker.
 //
-//   import { createClient, listThings } from '{{ .ImportPath }}'
-//   const client = createClient({ baseUrl: 'https://{{ .Name }}' })
-//   const { data, error } = await listThings({ client })
+//   import { createResilientFetch, listThings } from '{{ .ImportPath }}'
 //
-// Hand-written, unlike everything it re-exports: the generator owns
-// generated/ and clears it on every run, and this file decides what
-// the package's surface is.
+// A consumer that configures the generated module-level client with
+// createResilientFetch gets the retries without naming a client at
+// every call. createClient builds a separate one, for several
+// policies or several hosts.
+//
+// Written from a homelabctl template rather than by hey-api: the
+// generator owns generated/ and clears it on every run, so this file
+// sits above it and decides what the package's surface is.
 export * from './generated/sdk.gen{{ if .Published }}.ts{{ end }}'
 export * from './generated/types.gen{{ if .Published }}.ts{{ end }}'
 export {

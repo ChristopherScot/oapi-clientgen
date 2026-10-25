@@ -116,6 +116,12 @@ type Breaker struct {
 	mu       sync.Mutex
 	failures int
 	openedAt time.Time
+	// probing is true while one caller is through the half-open gate
+	// and has not reported back. Without it every caller waiting out
+	// the cooldown is released at once - which is the stampede the
+	// breaker exists to stop, aimed at a dependency that has just
+	// proved it is struggling.
+	probing bool
 }
 
 func (b *Breaker) allow() bool {
@@ -124,8 +130,11 @@ func (b *Breaker) allow() bool {
 	if b.failures < b.Threshold {
 		return true
 	}
-	if time.Since(b.openedAt) > b.Cooldown {
-		b.failures = 0 // half-open: one probe decides whether to close
+	// Open. One caller past the cooldown gets through to find out
+	// whether the dependency is back; everyone else waits for its
+	// verdict rather than joining it.
+	if !b.probing && time.Since(b.openedAt) > b.Cooldown {
+		b.probing = true
 		return true
 	}
 	return false
@@ -134,12 +143,20 @@ func (b *Breaker) allow() bool {
 func (b *Breaker) record(failed bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	probe := b.probing
+	b.probing = false
+
 	if !failed {
 		b.failures = 0
 		return
 	}
 	b.failures++
-	if b.failures == b.Threshold {
+	// >= not ==: requests already in flight when the breaker tripped
+	// land afterwards, and with == their failures would not move the
+	// clock, so the cooldown would be measured from the first trip
+	// and expire early. A failed probe re-arms it for the same
+	// reason - the dependency is still down.
+	if b.failures >= b.Threshold || probe {
 		b.openedAt = time.Now()
 	}
 }
@@ -273,7 +290,18 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 		}
-		time.Sleep(wait)
+
+		// Wait, but not past the caller's deadline. time.Sleep would
+		// park this goroutine for the server's full Retry-After - up
+		// to maxRetryAfter - after the caller has already given up,
+		// and return an answer nobody is waiting for.
+		timer := time.NewTimer(wait)
+		select {
+		case <-req.Context().Done():
+			timer.Stop()
+			return nil, req.Context().Err()
+		case <-timer.C:
+		}
 	}
 	if c.breaker != nil {
 		c.breaker.record(err != nil || (resp != nil && resp.StatusCode >= http.StatusInternalServerError))

@@ -5,6 +5,9 @@
 package {{ .Package }}
 
 import (
+	"context"
+	"sync"
+	"sync/atomic"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -207,5 +210,168 @@ func TestUnreplayableBodyIsNotRetried(t *testing.T) {
 
 	if attempts != 1 {
 		t.Errorf("attempts = %d, want 1: an unreplayable body must not be retried", attempts)
+	}
+}
+
+// A backoff must not outlive the caller. The server decides how long
+// Retry-After parks us - up to maxRetryAfter - and sleeping through a
+// cancelled context holds a goroutine to produce an answer nobody is
+// waiting for.
+func TestBackoffStopsWhenTheCallerGivesUp(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err == nil {
+		t.Error("want the context error, got nil")
+	}
+
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waited %v after a 50ms deadline; the backoff ignored the context", elapsed)
+	}
+}
+
+// Half-open means ONE caller finds out whether the dependency is
+// back. Releasing everyone who waited out the cooldown aims the whole
+// blocked set at something that has just proved it is struggling -
+// the stampede the breaker exists to prevent.
+func TestHalfOpenReleasesOneProbe(t *testing.T) {
+	b := &Breaker{Threshold: 3, Cooldown: 10 * time.Millisecond}
+	for i := 0; i < 3; i++ {
+		b.record(true)
+	}
+	if b.allow() {
+		t.Fatal("breaker should be open immediately after tripping")
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	var allowed atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if b.allow() {
+				allowed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := allowed.Load(); got != 1 {
+		t.Errorf("admitted %d of 100, want 1", got)
+	}
+}
+
+// A failed probe means the dependency is still down, so the cooldown
+// starts again rather than letting the next caller straight through.
+func TestFailedProbeReArmsTheCooldown(t *testing.T) {
+	b := &Breaker{Threshold: 1, Cooldown: 10 * time.Millisecond}
+	b.record(true)
+	time.Sleep(20 * time.Millisecond)
+
+	if !b.allow() {
+		t.Fatal("the probe should have been released after the cooldown")
+	}
+	b.record(true) // the probe failed
+
+	if b.allow() {
+		t.Error("a failed probe must re-arm the cooldown, not reopen the gate")
+	}
+}
+
+// Requests in flight when the breaker tripped land after it. Counting
+// their failures without moving openedAt measures the cooldown from
+// the first trip, so it expires early.
+func TestLateFailureMovesTheCooldown(t *testing.T) {
+	b := &Breaker{Threshold: 3, Cooldown: time.Hour}
+	for i := 0; i < 3; i++ {
+		b.record(true)
+	}
+	first := b.openedAt
+
+	time.Sleep(5 * time.Millisecond)
+	b.record(true)
+
+	if b.openedAt.Equal(first) {
+		t.Error("openedAt did not move on a failure after the trip")
+	}
+}
+
+// ExponentialRetry's shape, not just its count. Borrowed from wag's
+// TestExponentialClientRetries, which asserts the gap between
+// attempts rather than trusting the policy to be wired up.
+//
+// The window is wide because the backoff carries +/-25% jitter by
+// design - a fleet retrying in lockstep arrives as one wave - so this
+// pins the doubling without pinning the jitter.
+func TestExponentialRetryActuallyBacksOff(t *testing.T) {
+	var times []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		times = append(times, time.Now())
+		if len(times) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewHTTPClient(HTTPOptions{Policy: ExponentialRetry{}}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if len(times) != 3 {
+		t.Fatalf("attempts = %d, want 3", len(times))
+	}
+	// First backoff ~100ms, second ~200ms: the point is that the
+	// second is longer than the first, not that either is exact.
+	first := times[1].Sub(times[0])
+	second := times[2].Sub(times[1])
+	if first < 50*time.Millisecond || first > 200*time.Millisecond {
+		t.Errorf("first backoff %v, want roughly 100ms", first)
+	}
+	if second <= first {
+		t.Errorf("second backoff %v did not exceed the first %v: it is not backing off", second, first)
+	}
+}
+
+// A connection that never lands is retried too - the policy's `err !=
+// nil` arm. wag's TestNetworkErrorRetries covers the same ground via
+// an unresolvable host; a closed listener is faster and offline-safe.
+func TestTransportFailureIsRetried(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close() // nothing is listening now
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err == nil {
+		t.Fatal("want a transport error, got nil")
+	}
+
+	// SingleRetry waits a second between its two attempts, so a
+	// single-attempt run would come back far sooner.
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
+		t.Errorf("returned after %v: the transport failure was not retried", elapsed)
 	}
 }
