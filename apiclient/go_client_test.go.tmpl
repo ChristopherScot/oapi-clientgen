@@ -1,0 +1,770 @@
+{{ header `//` }}
+package {{ .Package }}
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestClientSendsVersionHeader(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(ClientVersionHeader)
+	}))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err != nil {
+		t.Fatal(err)
+	}
+	if got != ClientVersion {
+		t.Errorf("%s = %q, want %q", ClientVersionHeader, got, ClientVersion)
+	}
+}
+
+func TestRetryIsBoundedAndBreakerOpens(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(HTTPOptions{
+		Policy:  NoRetry{},
+		Breaker: &Breaker{FailedRequests: 3, Cooldown: time.Minute},
+	})
+	var opened int
+	for i := 0; i < 5; i++ {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if _, err := c.Do(req); err == ErrCircuitOpen {
+			opened++
+		}
+	}
+	if hits != 3 {
+		t.Errorf("upstream saw %d requests, want 3 before the breaker opened", hits)
+	}
+	if opened != 2 {
+		t.Errorf("%d calls rejected by an open circuit, want 2", opened)
+	}
+}
+
+// A POST may already have applied.
+func TestPostIsNeverRetried(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader("{}"))
+	NewHTTPClient(HTTPOptions{}).Do(req)
+	if hits != 1 {
+		t.Errorf("POST made %d attempts, want 1", hits)
+	}
+}
+
+func TestIdempotentRequestIsRetriedOnce(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	NewHTTPClient(HTTPOptions{}).Do(req)
+	if hits != 2 {
+		t.Errorf("GET made %d attempts, want 2 (initial + one retry)", hits)
+	}
+}
+
+// The server knows when capacity returns; the client does not.
+func TestRetryAfterBeatsThePolicyBackoff(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		if hits == 1 {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 after the retry", resp.StatusCode)
+	}
+	if elapsed < 2*time.Second {
+		t.Errorf("waited %v, want >= 2s - the server's Retry-After was ignored", elapsed)
+	}
+}
+
+// Sleeping an hour inside a request is indistinguishable from a hang.
+func TestRetryAfterIsCapped(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Retry-After": []string{"3600"}}}
+	_, ok, tooLong := retryAfter(resp, 30*time.Second)
+	if ok {
+		t.Error("accepted an hour-long Retry-After as a wait")
+	}
+	if !tooLong {
+		t.Error("an hour-long Retry-After must report tooLong, or the caller substitutes its own shorter backoff")
+	}
+}
+
+// What the cap means. Over the limit is "stop", not "ignore the
+// header": falling back to the policy's backoff retried a server
+// that asked for an hour after one second, which is the opposite of
+// what it asked for.
+func TestTooLongRetryAfterStopsRatherThanRetryingSooner(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: the server asked for an hour", attempts)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("waited %v before giving up", elapsed)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want the 429 handed back", resp.StatusCode)
+	}
+}
+
+func TestRetryAfterAcceptsAnHTTPDate(t *testing.T) {
+	when := time.Now().Add(3 * time.Second).UTC().Format(http.TimeFormat)
+	resp := &http.Response{Header: http.Header{"Retry-After": []string{when}}}
+	d, ok, _ := retryAfter(resp, 30*time.Second)
+	if !ok {
+		t.Fatal("rejected a valid HTTP-date")
+	}
+	if d < 1*time.Second || d > 4*time.Second {
+		t.Errorf("parsed delay = %v, want about 3s", d)
+	}
+}
+
+func TestUnparseableRetryAfterFallsBackToThePolicy(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Retry-After": []string{"soon-ish"}}}
+	if _, ok, _ := retryAfter(resp, 30*time.Second); ok {
+		t.Error("accepted an unparseable Retry-After")
+	}
+}
+
+// A retried request has to send the SAME body it was given. The first
+// attempt drains req.Body, so replaying without rewinding sends an
+// empty one - and because Content-Length is already set, a server can
+// hang waiting for bytes that never come rather than fail cleanly.
+//
+// PUT and DELETE are both retryable and both carry bodies, so this is
+// reachable with the default policy.
+func TestRetriedRequestResendsItsBody(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		if len(bodies) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPut, srv.URL, strings.NewReader("the payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if len(bodies) != 2 {
+		t.Fatalf("attempts = %d, want 2", len(bodies))
+	}
+	if bodies[1] != "the payload" {
+		t.Errorf("retry sent %q, want %q - the body was not rewound", bodies[1], "the payload")
+	}
+}
+
+// A body with no GetBody cannot be replayed, so it must not be
+// retried: a half-sent request repeated is worse than one failure.
+func TestUnreplayableBodyIsNotRetried(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPut, srv.URL, io.NopCloser(strings.NewReader("x")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.GetBody = nil // what a non-rewindable reader gives you
+
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: an unreplayable body must not be retried", attempts)
+	}
+}
+
+// A backoff must not outlive the caller. The server decides how long
+// Retry-After parks us - up to maxRetryAfter - and sleeping through a
+// cancelled context holds a goroutine to produce an answer nobody is
+// waiting for.
+func TestBackoffStopsWhenTheCallerGivesUp(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err == nil {
+		t.Error("want the context error, got nil")
+	}
+
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waited %v after a 50ms deadline; the backoff ignored the context", elapsed)
+	}
+}
+
+// Half-open means ONE caller finds out whether the dependency is
+// back. Releasing everyone who waited out the cooldown aims the whole
+// blocked set at something that has just proved it is struggling -
+// the stampede the breaker exists to prevent.
+func TestHalfOpenReleasesOneProbe(t *testing.T) {
+	b := &Breaker{FailedRequests: 3, Cooldown: 10 * time.Millisecond}
+	for i := 0; i < 3; i++ {
+		b.record(unwell)
+	}
+	if b.allow() {
+		t.Fatal("breaker should be open immediately after tripping")
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	var allowed atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if b.allow() {
+				allowed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := allowed.Load(); got != 1 {
+		t.Errorf("admitted %d of 100, want 1", got)
+	}
+}
+
+// A failed probe means the dependency is still down, so the cooldown
+// starts again rather than letting the next caller straight through.
+func TestFailedProbeReArmsTheCooldown(t *testing.T) {
+	b := &Breaker{FailedRequests: 1, Cooldown: 10 * time.Millisecond}
+	b.record(unwell)
+	time.Sleep(20 * time.Millisecond)
+
+	if !b.allow() {
+		t.Fatal("the probe should have been released after the cooldown")
+	}
+	b.record(unwell) // the probe failed
+
+	if b.allow() {
+		t.Error("a failed probe must re-arm the cooldown, not reopen the gate")
+	}
+}
+
+// Requests in flight when the breaker tripped land after it. Counting
+// their failures without moving openedAt measures the cooldown from
+// the first trip, so it expires early.
+func TestLateFailureMovesTheCooldown(t *testing.T) {
+	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
+	for i := 0; i < 3; i++ {
+		b.record(unwell)
+	}
+	first := b.openedAt
+
+	time.Sleep(5 * time.Millisecond)
+	b.record(unwell)
+
+	if b.openedAt.Equal(first) {
+		t.Error("openedAt did not move on a failure after the trip")
+	}
+}
+
+// ExponentialRetry's shape, not just its count. Borrowed from wag's
+// TestExponentialClientRetries, which asserts the gap between
+// attempts rather than trusting the policy to be wired up.
+//
+// The window is wide because the backoff carries +/-25% jitter by
+// design - a fleet retrying in lockstep arrives as one wave - so this
+// pins the doubling without pinning the jitter.
+func TestExponentialRetryActuallyBacksOff(t *testing.T) {
+	var times []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		times = append(times, time.Now())
+		if len(times) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewHTTPClient(HTTPOptions{Policy: ExponentialRetry{}}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if len(times) != 3 {
+		t.Fatalf("attempts = %d, want 3", len(times))
+	}
+	// First backoff ~100ms, second ~200ms: the point is that the
+	// second is longer than the first, not that either is exact.
+	first := times[1].Sub(times[0])
+	second := times[2].Sub(times[1])
+	if first < 50*time.Millisecond || first > 200*time.Millisecond {
+		t.Errorf("first backoff %v, want roughly 100ms", first)
+	}
+	if second <= first {
+		t.Errorf("second backoff %v did not exceed the first %v: it is not backing off", second, first)
+	}
+}
+
+// A connection that never lands is retried too - the policy's `err !=
+// nil` arm. wag's TestNetworkErrorRetries covers the same ground via
+// an unresolvable host; a closed listener is faster and offline-safe.
+func TestTransportFailureIsRetried(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close() // nothing is listening now
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err == nil {
+		t.Fatal("want a transport error, got nil")
+	}
+
+	// SingleRetry waits a second between its two attempts, so a
+	// single-attempt run would come back far sooner.
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
+		t.Errorf("returned after %v: the transport failure was not retried", elapsed)
+	}
+}
+
+// The half-open probe is a loan: allow() hands it out, record() takes
+// it back. A probe that returns without reporting - a caller who
+// cancels mid-backoff, which is routine in a CLI or a phone app -
+// leaves the breaker believing it is still in flight, and allow()
+// then refuses everyone for good. Wedged closed does not heal, so it
+// is worse than the stampede the probe gate replaced.
+func TestCancelledProbeDoesNotWedgeTheBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{FailedRequests: 1, Cooldown: 10 * time.Millisecond}
+	c := NewHTTPClient(HTTPOptions{Breaker: b})
+
+	// Trip it.
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// Take the probe, then give up while it is backing off.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	probe, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Do(probe); err == nil {
+		t.Fatal("want the context error from the abandoned probe")
+	}
+
+	// The breaker has to be usable again once the cooldown lapses.
+	time.Sleep(30 * time.Millisecond)
+	if !b.allow() {
+		t.Error("breaker wedged: the abandoned probe was never returned")
+	}
+}
+
+// A breaker counts evidence that the SERVICE is unwell. A caller
+// changing its mind is not that: three impatient taps in a CLI or a
+// phone app must not open the circuit against a server answering
+// fine.
+func TestCancellationIsNotADependencyFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+
+	for i := 0; i < 3; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		cancel()
+	}
+
+	if !b.allow() {
+		t.Error("cancelled requests opened the circuit against a healthy server")
+	}
+}
+
+// 501 and 505 are permanent protocol answers, not outages. They do
+// not recover after a cooldown, so counting them would leave the
+// breaker flapping open forever against a service working as built.
+func TestPermanentProtocolErrorsAreNotDependencyFailures(t *testing.T) {
+	for _, status := range []int{http.StatusNotImplemented, http.StatusHTTPVersionNotSupported} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+
+		b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+		c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+		for i := 0; i < 3; i++ {
+			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := c.Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}
+		srv.Close()
+
+		if !b.allow() {
+			t.Errorf("status %d opened the circuit; it will never heal", status)
+		}
+	}
+}
+
+// A 500 still counts: that is the case the breaker exists for.
+func TestServerErrorsStillTripTheBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	for i := 0; i < 2; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if b.allow() {
+		t.Error("two 500s should have opened the circuit")
+	}
+}
+
+// Our own per-attempt Timeout firing is NOT the caller giving up. A
+// service too slow to answer within it is unwell, which is a case the
+// breaker exists for - and both situations surface as
+// context.DeadlineExceeded, so the error alone cannot tell them
+// apart.
+func TestAHungDependencyStillTripsTheBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{
+		Breaker: b,
+		Policy:  NoRetry{},
+		Timeout: 20 * time.Millisecond,
+	})
+	for i := 0; i < 3; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if b.allow() {
+		t.Error("a dependency that never answers did not trip the breaker")
+	}
+}
+
+// "Tells us nothing" is not "went fine". A service answering 500 on
+// one route and 501 on another is still down, but if the 501s reset
+// the count the 500s built up, the circuit never opens.
+func TestAnIgnoredOutcomeDoesNotEraseRealFailures(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if n.Add(1)%2 == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	for i := 0; i < 20; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if b.allow() {
+		t.Error("ten 500s did not open the circuit; the interleaved 501s erased them")
+	}
+}
+
+// A success still clears the run: that is what tells the breaker the
+// service came back.
+func TestASuccessClearsTheFailureRun(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if n.Add(1) <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	for i := 0; i < 4; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if !b.allow() {
+		t.Error("two 500s followed by successes should have cleared the run")
+	}
+}
+
+// A permanently unimplemented route does not become implemented on
+// the next attempt, so retrying it only spends the budget.
+func TestPermanentProtocolErrorsAreNotRetried(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a 501 will not become a 200", attempts)
+	}
+}
+
+// An inconclusive probe still spends the slot. Without re-arming,
+// the cooldown has already elapsed when the probe reports back, so
+// the next caller is handed another probe immediately - and an open
+// circuit stops throttling precisely when the callers most likely to
+// cancel are the ones waiting on it.
+func TestAnIgnoredProbeStillCostsACooldown(t *testing.T) {
+	b := &Breaker{FailedRequests: 1, Cooldown: 50 * time.Millisecond}
+	b.record(unwell)
+	time.Sleep(60 * time.Millisecond)
+
+	if !b.allow() {
+		t.Fatal("the probe should have been released after the cooldown")
+	}
+	b.record(ignore) // it told us nothing
+
+	if b.allow() {
+		t.Error("a second probe was released immediately; the open circuit is not throttling")
+	}
+}
+
+// A Breaker nobody configured must not refuse traffic.
+//
+// It does not get there the obvious way. FailedRequests zero makes
+// the first check 0 < 0, which is false, so EVERY call falls through
+// to the probe gate - and passes it, because the zero openedAt makes
+// time.Since enormous. So a zero-valued Breaker is not disabled, it
+// hands out an unlimited supply of half-open probes, which happens
+// to look identical from outside.
+//
+// Pinned because the obvious hardening - requiring openedAt to be
+// set before the probe gate opens - would turn that into a client
+// that refuses its own first request.
+func TestAZeroValuedBreakerDisablesItself(t *testing.T) {
+	if !(&Breaker{}).allow() {
+		t.Error("a fresh zero-valued Breaker refused the first request")
+	}
+
+	// Through the allow/record pairing a caller actually uses: a bare
+	// run of record() would leave a probe outstanding from the first
+	// allow() and test a state Do never produces.
+	b := &Breaker{}
+	for i := 0; i < 5; i++ {
+		if b.allow() {
+			b.record(unwell)
+		}
+	}
+
+	// The probe gate compares against a real clock, and a zero
+	// Cooldown means it needs time.Since(openedAt) > 0 - so without a
+	// gap this asserts that the monotonic clock advanced a nanosecond
+	// between the last record() and here. It often has not: 60 of 200
+	// bare runs failed. -race slows execution enough to hide it,
+	// which is every sanctioned path - the Makefile runs -race - so
+	// it would have failed for a consumer and never for us.
+	time.Sleep(time.Millisecond)
+
+	if !b.allow() {
+		t.Error("a zero-valued Breaker started refusing traffic")
+	}
+}
+
+// An ignored outcome from a request holding NO probe must not touch
+// the clock. Do consults the breaker once, so requests already in
+// flight when it tripped land afterwards; a caller cancelling one of
+// those says nothing about the dependency and must not push its
+// recovery further away.
+func TestAnIgnoredNonProbeDoesNotDelayRecovery(t *testing.T) {
+	b := &Breaker{FailedRequests: 1, Cooldown: 50 * time.Millisecond}
+	b.record(unwell)
+	time.Sleep(30 * time.Millisecond)
+
+	// Lands late, cancelled by its caller, holding no probe.
+	b.record(ignore)
+
+	time.Sleep(30 * time.Millisecond) // 60ms since the trip
+	if !b.allow() {
+		t.Error("the cooldown was restarted by a request that learned nothing")
+	}
+}
+
+// The two ignore paths at FailedRequests zero, which is where a
+// sweep is weakest: `failures >= FailedRequests` is vacuously true
+// there, so it stops discriminating and the probe is the only thing
+// left that decides whether the clock moves.
+func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
+	marker := time.Unix(1, 0)
+
+	held := &Breaker{FailedRequests: 0, Cooldown: time.Hour, probing: true, openedAt: marker}
+	held.record(ignore)
+	if held.probing {
+		t.Error("the probe was not handed back")
+	}
+	if held.openedAt.Equal(marker) {
+		t.Error("an ignored probe must spend its slot and arm the clock")
+	}
+
+	none := &Breaker{FailedRequests: 0, Cooldown: time.Hour, openedAt: marker}
+	none.record(ignore)
+	if !none.openedAt.Equal(marker) {
+		t.Error("an ignored non-probe armed the clock and delayed recovery")
+	}
+}

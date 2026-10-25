@@ -1,0 +1,30 @@
+/* eslint-disable */
+{{ header `//` }}// The package entry: generated operations plus the transport that
+// carries the retries, timeout and circuit breaker.
+//
+//   import { createResilientFetch, listThings } from '{{ .ImportPath }}'
+//
+// A consumer that configures the generated module-level client with
+// createResilientFetch gets the retries without naming a client at
+// every call. createClient builds a separate one, for several
+// policies or several hosts.
+//
+// Written from a homelabctl template rather than by hey-api: the
+// generator owns generated/ and clears it on every run, so this file
+// sits above it and decides what the package's surface is.
+export * from './generated/sdk.gen{{ if .Published }}.ts{{ end }}'
+export * from './generated/types.gen{{ if .Published }}.ts{{ end }}'
+export {
+  Breaker,
+  CircuitOpenError,
+  ClientNameHeader,
+  ClientVersion,
+  ClientVersionHeader,
+  createClient,
+  createResilientFetch,
+  exponentialRetry,
+  noRetry,
+  retryAfterMs,
+  singleRetry,
+} from './resilience{{ if .Published }}.ts{{ end }}'
+export type { ClientOptions, RetryPolicy } from './resilience{{ if .Published }}.ts{{ end }}'
