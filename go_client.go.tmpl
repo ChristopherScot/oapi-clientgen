@@ -230,44 +230,44 @@ func (b *Breaker) allow() bool {
 	return false
 }
 
-// record is the other half of allow, and every path through it has
-// to leave two things true: the probe slot is back, and the clock is
-// in a state that bounds the next probe. Clearing the run does the
-// second implicitly; so does arming openedAt. An outcome that does
-// NEITHER - which is what ignore was when it was added - leaves an
-// open circuit with an elapsed cooldown, handing a fresh probe to
-// every caller that asks.
+// record is the other half of allow: it takes the probe slot back
+// and decides what the outcome does to the failure run.
+//
+// No early returns, on purpose. Each outcome says only what it does
+// to the run; the probe accounting and the clock happen once, below,
+// on every path. An outcome added later cannot forget to hand the
+// slot back or to re-arm the cooldown, which is how ignore shipped
+// broken twice - once wedging the breaker closed, once letting an
+// open circuit stop throttling.
 func (b *Breaker) record(o outcome) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// Taken back before the ignore branch returns: a probe that is
-	// never returned wedges the breaker closed for good.
+
 	probe := b.probing
 	b.probing = false
 
-	if o == ignore {
-		// An inconclusive probe still spends the slot. We learned
-		// nothing, so the dependency is still presumed down - and
-		// without re-arming, the cooldown has already elapsed, so
-		// the next caller gets another probe, and the next. An open
-		// circuit would stop throttling exactly when the callers
-		// most likely to cancel are the ones waiting on it.
-		if probe {
-			b.openedAt = time.Now()
-		}
-		return
-	}
-	if o == healthy {
+	switch o {
+	case healthy:
+		// The service answered. Whatever run was building is over.
 		b.failures = 0
-		return
+	case unwell:
+		b.failures++
+	case ignore:
+		// Tells us nothing, so the run stands: neither extended nor
+		// cleared. The clock below still moves if this spent a probe.
 	}
-	b.failures++
+
+	// Re-arm when the circuit is open or has just opened, and when a
+	// probe came back without proving recovery - an inconclusive
+	// probe leaves the dependency still presumed down, so the next
+	// caller waits out another cooldown rather than being handed the
+	// slot immediately.
+	//
 	// >= not ==: requests already in flight when the breaker tripped
 	// land afterwards, and with == their failures would not move the
 	// clock, so the cooldown would be measured from the first trip
-	// and expire early. A failed probe re-arms it for the same
-	// reason - the dependency is still down.
-	if b.failures >= b.FailedRequests || probe {
+	// and expire early.
+	if o != healthy && (b.failures >= b.FailedRequests || probe) {
 		b.openedAt = time.Now()
 	}
 }

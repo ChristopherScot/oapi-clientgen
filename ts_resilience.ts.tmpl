@@ -213,30 +213,36 @@ export class Breaker {
     return false
   }
 
+  /** Takes the probe slot back and decides what the outcome does to
+   *  the failure run.
+   *
+   *  No early returns, on purpose: each outcome says only what it
+   *  does to the run, and the probe accounting and the clock happen
+   *  once, below, on every path. An outcome added later cannot
+   *  forget to hand the slot back or re-arm the cooldown - which is
+   *  how ignore shipped broken twice. */
   record(o: Outcome): void {
-    // Taken back before the ignore branch returns: a probe that is
-    // never returned wedges the breaker closed for good.
     const probe = this.#probing
     this.#probing = false
 
-    if (o === 'ignore') {
-      // An inconclusive probe still spends the slot. We learned
-      // nothing, so the dependency is still presumed down - and
-      // without re-arming, the cooldown has already elapsed, so the
-      // next caller gets another probe, and the next.
-      if (probe) this.#openedAt = Date.now()
-      return
-    }
     if (o === 'healthy') {
+      // The service answered. Whatever run was building is over.
       this.#failures = 0
-      return
+    } else if (o === 'unwell') {
+      this.#failures++
     }
-    this.#failures++
-    // >= not ===: requests already in flight when the breaker tripped
-    // land afterwards, and with === their failures would not move the
-    // clock, so the cooldown would expire early. A failed probe
-    // re-arms it - the dependency is still down.
-    if (this.#failures >= this.failedRequests || probe) this.#openedAt = Date.now()
+    // 'ignore' tells us nothing, so the run stands: neither extended
+    // nor cleared. The clock below still moves if it spent a probe.
+
+    // Re-arm when the circuit is open or has just opened, and when a
+    // probe came back without proving recovery.
+    //
+    // >= not ===: requests already in flight when the breaker
+    // tripped land afterwards, and with === their failures would not
+    // move the clock, so the cooldown would expire early.
+    if (o !== 'healthy' && (this.#failures >= this.failedRequests || probe)) {
+      this.#openedAt = Date.now()
+    }
   }
 }
 

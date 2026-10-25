@@ -715,6 +715,16 @@ func TestAZeroValuedBreakerDisablesItself(t *testing.T) {
 			b.record(unwell)
 		}
 	}
+
+	// The probe gate compares against a real clock, and a zero
+	// Cooldown means it needs time.Since(openedAt) > 0 - so without a
+	// gap this asserts that the monotonic clock advanced a nanosecond
+	// between the last record() and here. It often has not: 60 of 200
+	// bare runs failed. -race slows execution enough to hide it,
+	// which is every sanctioned path - the Makefile runs -race - so
+	// it would have failed for a consumer and never for us.
+	time.Sleep(time.Millisecond)
+
 	if !b.allow() {
 		t.Error("a zero-valued Breaker started refusing traffic")
 	}
