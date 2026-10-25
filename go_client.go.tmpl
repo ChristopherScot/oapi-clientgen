@@ -5,6 +5,7 @@
 package {{ .Package }}
 
 import (
+	"context"
 	"errors"
 	"io"
 	"math/rand/v2"
@@ -103,6 +104,36 @@ func retryable(req *http.Request, resp *http.Response, err error) bool {
 	return resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 }
 
+// dependencyFailed says whether this outcome is evidence that the
+// SERVICE is unwell, which is the only thing a breaker should count.
+//
+// Two things look like failures and are not:
+//
+// A cancelled or timed-out request says the caller changed its mind.
+// Counting those meant three impatient taps in a CLI or a phone app
+// opened the circuit against a server that was answering fine.
+//
+// 501 and 505 are permanent protocol answers. The route is not
+// implemented, or the version is not spoken; neither recovers after
+// a cooldown, so counting them leaves the breaker flapping open
+// forever against a service that is working exactly as built.
+func dependencyFailed(resp *http.Response, err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	if resp == nil {
+		return false
+	}
+	switch resp.StatusCode {
+	case http.StatusNotImplemented, http.StatusHTTPVersionNotSupported:
+		return false
+	}
+	return resp.StatusCode >= http.StatusInternalServerError
+}
+
 // ErrCircuitOpen fails a caller immediately rather than queueing it
 // behind a timeout it is going to hit anyway.
 var ErrCircuitOpen = errors.New("circuit open")
@@ -110,6 +141,11 @@ var ErrCircuitOpen = errors.New("circuit open")
 // Breaker trips after Threshold consecutive failures and lets one
 // request through every Cooldown to probe recovery.
 type Breaker struct {
+	// Threshold counts REQUESTS, not attempts. record() runs once per
+	// Do, so a request that burned six attempts under ExponentialRetry
+	// and still failed counts as one. Threshold: 3 therefore tolerates
+	// up to eighteen failed round trips before opening - size it in
+	// requests and read Policy for what each one costs.
 	Threshold int
 	Cooldown  time.Duration
 
@@ -291,9 +327,7 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 	// closed is worse than the stampede it replaced, because it does
 	// not heal.
 	if c.breaker != nil {
-		defer func() {
-			c.breaker.record(err != nil || (resp != nil && resp.StatusCode >= http.StatusInternalServerError))
-		}()
+		defer func() { c.breaker.record(dependencyFailed(resp, err)) }()
 	}
 
 	for attempt := 0; ; attempt++ {

@@ -459,3 +459,90 @@ func TestCancelledProbeDoesNotWedgeTheBreaker(t *testing.T) {
 		t.Error("breaker wedged: the abandoned probe was never returned")
 	}
 }
+
+// A breaker counts evidence that the SERVICE is unwell. A caller
+// changing its mind is not that: three impatient taps in a CLI or a
+// phone app must not open the circuit against a server answering
+// fine.
+func TestCancellationIsNotADependencyFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+
+	for i := 0; i < 3; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		cancel()
+	}
+
+	if !b.allow() {
+		t.Error("cancelled requests opened the circuit against a healthy server")
+	}
+}
+
+// 501 and 505 are permanent protocol answers, not outages. They do
+// not recover after a cooldown, so counting them would leave the
+// breaker flapping open forever against a service working as built.
+func TestPermanentProtocolErrorsAreNotDependencyFailures(t *testing.T) {
+	for _, status := range []int{http.StatusNotImplemented, http.StatusHTTPVersionNotSupported} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+
+		b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+		c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+		for i := 0; i < 3; i++ {
+			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := c.Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}
+		srv.Close()
+
+		if !b.allow() {
+			t.Errorf("status %d opened the circuit; it will never heal", status)
+		}
+	}
+}
+
+// A 500 still counts: that is the case the breaker exists for.
+func TestServerErrorsStillTripTheBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	b := &Breaker{Threshold: 2, Cooldown: time.Hour}
+	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	for i := 0; i < 2; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if b.allow() {
+		t.Error("two 500s should have opened the circuit")
+	}
+}

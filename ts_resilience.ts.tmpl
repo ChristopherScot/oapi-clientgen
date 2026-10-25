@@ -58,6 +58,29 @@ export interface ClientOptions {
   maxRetryAfterMs?: number
 }
 
+/**
+ * Whether this outcome is evidence that the SERVICE is unwell, which
+ * is the only thing a breaker should count.
+ *
+ * Two things look like failures and are not. An abort says the
+ * caller changed its mind - counting those meant a few impatient
+ * taps opened the circuit against a server answering fine. And 501
+ * and 505 are permanent protocol answers: neither recovers after a
+ * cooldown, so counting them leaves the breaker open forever against
+ * a service working exactly as built.
+ */
+function dependencyFailed(res: Response | undefined, err: unknown): boolean {
+  if (err !== undefined) {
+    // fetch reports both an AbortController and an AbortSignal
+    // timeout this way.
+    return !(err instanceof DOMException && err.name === 'AbortError') &&
+      !(err instanceof Error && err.name === 'TimeoutError')
+  }
+  if (res === undefined) return false
+  if (res.status === 501 || res.status === 505) return false
+  return res.status >= 500
+}
+
 /** A backoff that a caller can cut short. Rejects with the signal's
  *  own reason, so an aborted call fails the way fetch would have. */
 function abortableDelay(ms: number, signal?: AbortSignal | null): Promise<void> {
@@ -149,6 +172,10 @@ export class Breaker {
   readonly threshold: number
   readonly cooldownMs: number
 
+  /** threshold counts REQUESTS, not attempts: record() runs once per
+   *  call, so a request that burned every retry and still failed
+   *  counts as one. Size it in requests and read the policy for what
+   *  each one costs. */
   constructor(threshold = 5, cooldownMs = 30_000) {
     this.threshold = threshold
     this.cooldownMs = cooldownMs
@@ -263,7 +290,7 @@ export function createResilientFetch({
       }
 
     } finally {
-      breaker?.record(err !== undefined || (res !== undefined && res.status >= 500))
+      breaker?.record(dependencyFailed(res, err))
     }
 
     if (err !== undefined) throw err
