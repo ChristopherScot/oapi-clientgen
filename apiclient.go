@@ -125,8 +125,25 @@ func render(name string, p Params) (string, error) {
 // here, so adding a file does not mean remembering a second list.
 var tsFiles = []struct{ tmpl, path string }{
 	{"ts_resilience.ts.tmpl", "resilience.ts"},
-	{"ts_resilience_test.ts.tmpl", "resilience.test.ts"},
 	{"ts_index.ts.tmpl", "index.ts"},
+}
+
+// tsTestFiles are rendered by this repo's own tests and NOT shipped to
+// consumers, which is the one place the two languages differ.
+//
+// The Go tests ship because a consumer can run them: same toolchain,
+// same runner, `go test ./...` finds them and they pass. The
+// TypeScript ones cannot. They are written for `node --test`, and the
+// repo that consumes this client runs vitest, whose default include is
+// **/*.test.ts - so shipping this file would hand vitest a suite it
+// cannot run, importing node:test from a project with no @types/node.
+//
+// Rewriting them for vitest would tie this generator to one consumer's
+// choice of runner, and the next consumer's choice would be a second
+// copy. So they stay here, where TestTheGeneratedTypeScriptTestsPass
+// renders and runs them against the real template.
+var tsTestFiles = []struct{ tmpl, path string }{
+	{"ts_resilience_test.ts.tmpl", "resilience.test.ts"},
 }
 
 var goFiles = []struct{ tmpl, path string }{
@@ -139,6 +156,10 @@ var goFiles = []struct{ tmpl, path string }{
 // TypeScript returns the files that sit beside a generated TypeScript
 // client.
 func TypeScript(p Params) ([]File, error) { return files(tsFiles, p) }
+
+// TypeScriptTests returns the TypeScript client's own tests. They are
+// rendered by this repo's tests rather than shipped; see tsTestFiles.
+func TypeScriptTests(p Params) ([]File, error) { return files(tsTestFiles, p) }
 
 // Go returns the files that sit beside a generated Go client.
 func Go(p Params) ([]File, error) { return files(goFiles, p) }

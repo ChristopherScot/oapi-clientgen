@@ -37,13 +37,18 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	// (moduleResolution: "Bundler") and node does not. The resilience
 	// logic under test is identical either way - only the import
 	// specifiers differ.
-	files, err := apiclient.TypeScript(apiclient.Params{
+	p := apiclient.Params{
 		Name: "probe", Version: "1.0.0", ImportPath: "probe-client", Published: true,
-	})
+	}
+	client, err := apiclient.TypeScript(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range files {
+	tests, err := apiclient.TypeScriptTests(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range append(client, tests...) {
 		if err := os.WriteFile(filepath.Join(dir, f.Path), []byte(f.Body), 0o644); err != nil {
 			t.Fatal(err)
 		}
