@@ -193,8 +193,7 @@ export class Breaker {
   readonly cooldownMs: number
 
   /** failedRequests is how many consecutive failed REQUESTS open the
-   *  circuit. A request that exhausted its retries counts once, so
-   *  the number of round trips behind it depends on the policy. */
+   *  circuit. A request that exhausted its retries counts once. */
   constructor(failedRequests = 5, cooldownMs = 30_000) {
     this.failedRequests = failedRequests
     this.cooldownMs = cooldownMs

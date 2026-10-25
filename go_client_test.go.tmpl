@@ -688,3 +688,28 @@ func TestAnIgnoredProbeStillCostsACooldown(t *testing.T) {
 		t.Error("a second probe was released immediately; the open circuit is not throttling")
 	}
 }
+
+// A Breaker nobody configured must not refuse traffic.
+//
+// It does not get there the obvious way. FailedRequests zero makes
+// the first check 0 < 0, which is false, so EVERY call falls through
+// to the probe gate - and passes it, because the zero openedAt makes
+// time.Since enormous. So a zero-valued Breaker is not disabled, it
+// hands out an unlimited supply of half-open probes, which happens
+// to look identical from outside.
+//
+// Pinned because the obvious hardening - requiring openedAt to be
+// set before the probe gate opens - would turn that into a client
+// that refuses its own first request.
+func TestAZeroValuedBreakerDisablesItself(t *testing.T) {
+	b := &Breaker{}
+	if !b.allow() {
+		t.Fatal("a fresh zero-valued Breaker refused the first request")
+	}
+	for i := 0; i < 5; i++ {
+		b.record(unwell)
+	}
+	if !b.allow() {
+		t.Error("a zero-valued Breaker opened its circuit; zero should disable it")
+	}
+}
