@@ -122,7 +122,7 @@ func TestRetiredNamesNothingStillShipped(t *testing.T) {
 			shipped[f.Path] = true
 		}
 	}
-	for _, name := range apiclient.Retired {
+	for _, name := range apiclient.Retired() {
 		if shipped[name] {
 			t.Errorf("%s is in Retired and still shipped: it would be written, then deleted", name)
 		}
@@ -187,5 +187,19 @@ func TestWroteItStillClaimsWhatOlderVersionsWrote(t *testing.T) {
 				"every client generated with it can never be cleaned up:\n%s",
 				shipped.name, shipped.head)
 		}
+	}
+}
+
+// The list decides what RemoveRetired deletes from a consumer's repo,
+// so a caller must not be able to change it.
+func TestRetiredCannotBeChangedByACaller(t *testing.T) {
+	got := apiclient.Retired()
+	if len(got) == 0 {
+		t.Fatal("Retired() is empty")
+	}
+	got[0] = "client.go"
+
+	if again := apiclient.Retired()[0]; again == "client.go" {
+		t.Error("writing to the returned slice changed the package's own list")
 	}
 }

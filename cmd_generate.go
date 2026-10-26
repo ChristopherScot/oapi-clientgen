@@ -45,6 +45,15 @@ func clientGenerateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "generate [name...]",
 		Short: "generate clients from a third-party OpenAPI spec",
+		// The arguments are the manifest's client names, so complete
+		// them rather than letting the shell offer filenames.
+		ValidArgsFunction: makeCompleter(func() ([]string, error) {
+			_, m, err := generate.LoadManifest("")
+			if err != nil {
+				return nil, err
+			}
+			return generate.Names(m), nil
+		}),
 		Long: `Generate typed clients from a third-party OpenAPI spec.
 
 With no arguments, generates every client in clients.yaml. Named

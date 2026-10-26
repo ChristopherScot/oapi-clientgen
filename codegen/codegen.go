@@ -57,6 +57,11 @@ func HeyAPICommand(configPath string) []string {
 // HeyAPICommandIn runs the generator for a client at its own package
 // root, named relative to the service directory.
 //
+// Used by homelabctl, not by this tool: a client it scaffolds for a
+// service publishes to npm and owns its own tsconfig, where a client
+// generated from a third party's spec is vendored into a repo that
+// does not.
+//
 // The cd puts npx's search for a package.json inside the client
 // rather than the repo above it, which is what makes the committed
 // config's relative paths resolve correctly.
@@ -84,7 +89,8 @@ export default {
 }
 
 // HeyAPIConfigAtRoot is the config for a client at its own package
-// root, where npx lands in the client.
+// root, where npx lands in the client. Used by homelabctl; see
+// HeyAPICommandIn.
 //
 // Paths are relative because this file is committed and read on
 // machines that never saw the one that wrote it. Published, so
