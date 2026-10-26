@@ -110,16 +110,8 @@ func retryable(req *http.Request, resp *http.Response, err error) bool {
 //
 // Three values, not two: "this tells us nothing" is different from
 // "this went fine". A breaker that treats them alike lets an ignored
-// outcome ERASE a run of real failures - a service answering 500 on
-// one route and 501 on another never trips, because each 501 zeroes
-// the count the 500s built up.
-//
-// sony/gobreaker draws the same three-way line: onSuccess clears
-// ConsecutiveFailures, onFailure increments it, and onExclusion
-// touches neither. Its exclusions are opt-in and keyed on errors
-// rather than status codes, because it wraps more than HTTP; this
-// client only speaks HTTP, and four consumers should not each have
-// to re-derive which statuses mean the service is unwell.
+// outcome erase a run of real failures - a service answering 500 on
+// one route and 501 on another would never trip.
 type outcome int
 
 const (
@@ -132,19 +124,12 @@ const (
 	ignore
 )
 
-// classify says what one request's outcome tells us about the
-// service, which is the only thing a breaker should count.
+// classify says what one request tells us about the service, which
+// is the only thing a breaker should count.
 //
-// Two things look like failures and are not:
-//
-// A cancelled or timed-out request says the caller changed its mind.
-// Counting those meant three impatient taps in a CLI or a phone app
-// opened the circuit against a server that was answering fine.
-//
-// 501 and 505 are permanent protocol answers. The route is not
-// implemented, or the version is not spoken; neither recovers after
-// a cooldown, so counting them leaves the breaker flapping open
-// forever against a service that is working exactly as built.
+// Two things look like failures and are not. A cancelled request
+// says the caller changed its mind, not that the server is unwell.
+// A 501 or 505 is a permanent answer that no cooldown changes.
 func classify(req *http.Request, resp *http.Response, err error) outcome {
 	// Whose deadline expired? Our own per-attempt Timeout surfaces as
 	// context.DeadlineExceeded too, and a service too slow to answer
@@ -174,11 +159,10 @@ func classify(req *http.Request, resp *http.Response, err error) outcome {
 }
 
 // permanentProtocolError reports whether a 5xx is a permanent
-// statement about THIS REQUEST rather than evidence about the
-// service's health: the route is not implemented (501), or the HTTP
-// version is not spoken (505). Neither changes after a cooldown, so
-// neither is worth a retry and neither belongs in the breaker's
-// count.
+// statement about this request rather than evidence about the
+// service: the route is not implemented (501), or the HTTP version
+// is not spoken (505). Neither is worth a retry or a place in the
+// breaker's count.
 func permanentProtocolError(status int) bool {
 	return status == http.StatusNotImplemented || status == http.StatusHTTPVersionNotSupported
 }
@@ -450,8 +434,9 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 		select {
 		case <-req.Context().Done():
 			timer.Stop()
-			// Named results, so the deferred record() sees the
-			// cancellation rather than the last response.
+			// resp and err are function-scope, so the deferred
+			// record() closure sees the cancellation rather than
+			// the last response.
 			resp, err = nil, req.Context().Err()
 			return resp, err
 		case <-timer.C:

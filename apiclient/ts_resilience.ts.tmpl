@@ -1,30 +1,23 @@
 /* eslint-disable */
 {{ header `//` }}// Resilience for the {{ .Name }} client: timeout, retry, circuit
-// breaker and the identifying headers. The transport defaults match
-// the Go client in api/client.go - 5s timeout, one retry (five can
-// mean five times the traffic to something already struggling) - and
-// both clients failing the same way is the point.
+// breaker and the identifying headers. The defaults match the Go
+// client in api/client.go - 5s timeout, one retry - because both
+// clients failing the same way is the point.
 //
-// The ONE place they differ is an unconfigured Breaker, and it is a
-// difference in the languages rather than a decision. `new Breaker()`
-// here takes the constructor defaults and opens after 5 failures; Go's
-// `&Breaker{}` has FailedRequests of 0 and lets everything through,
-// because a zero value cannot carry a default and a Breaker nobody
-// configured should not refuse traffic. Neither side is wrong for its
-// language, and both are tested; what would be wrong is assuming the
-// other one matches. Omit `breaker` (nil, in Go) to disable breaking
-// in either.
+// They differ in one place, and it is a language difference rather
+// than a decision: `new Breaker()` here opens after 5 failures, while
+// Go's `&Breaker{}` lets everything through, because a zero value
+// cannot carry a default. Both are tested. Omit `breaker` (nil, in
+// Go) to disable breaking in either.
 //
 //   import { createClient, listThings } from '{{ .ImportPath }}'
 //   const client = createClient({ baseUrl: 'https://{{ .Name }}' })
 //   const { data, error } = await listThings({ client })
 //
-// EVERYTHING BELOW IS GENERATOR-AGNOSTIC. It wraps `fetch` and knows
+// Everything below is generator-agnostic: it wraps `fetch` and knows
 // nothing about how the operations were generated. Swapping the
-// generator means changing the import and the one adapter call at the
-// bottom of this file - the Go client keeps the same seam, where
-// HTTPClient satisfies the generator's transport interface and the
-// retry logic is plain net/http.
+// generator means changing the import and the one adapter call at
+// the bottom of this file.
 // /index.ts, not .ts: generated/client is a DIRECTORY, so a published
 // client names its entry file where the others name themselves.
 import { createClient as createGeneratedClient, createConfig } from './generated/client{{ if .Published }}/index.ts{{ end }}'
@@ -69,13 +62,8 @@ export interface ClientOptions {
  *
  *  Three values, not two: "this tells us nothing" is different from
  *  "this went fine". A breaker that treats them alike lets an ignored
- *  outcome ERASE a run of real failures - a service answering 500 on
- *  one route and 501 on another never trips, because each 501 zeroes
- *  the count the 500s built up.
- *
- *  sony/gobreaker draws the same three-way line: a success clears the
- *  consecutive-failure count, a failure increments it, and an
- *  exclusion touches neither. */
+ *  outcome erase a run of real failures - a service answering 500 on
+ *  one route and 501 on another would never trip. */
 export type Outcome = 'healthy' | 'unwell' | 'ignore'
 
 /** A permanent statement about THIS REQUEST rather than evidence
@@ -270,15 +258,11 @@ export class Breaker {
  * The transport on its own: a `fetch` that times out, retries, obeys
  * Retry-After and trips a breaker.
  *
- * Exported separately from createClient because a consumer does not
- * always get to build the client. A generated package also ships a
- * module-level client that its operations fall back to, and an app
- * that wants its call sites to omit `client:` configures THAT one
- * with setConfig - which takes a fetch, not a client. Without this
- * the only way to get the retries was to build a second client the
- * operations would not use.
+ * Exported separately from createClient because setConfig takes a
+ * fetch, not a client - so an app configuring the module-level client
+ * can reach the retries without building a second one.
  *
- * Compose it with whatever else the caller's transport has to do:
+ * Compose it with whatever else the transport has to do:
  *
  *   fetch: (input, init) => resilientFetch(withAuth(input, init))
  */
@@ -376,31 +360,15 @@ export function createClient({ baseUrl, ...options }: ClientOptions) {
 
   // Keep fetch's own split between the two kinds of failure.
   //
-  // An HTTP error status is an ANSWER: the server replied, and the
-  // reply is "no". Callers branch on those - 401 means re-auth, 409
-  // means conflict - so they arrive as { error }, and throwing would
-  // wrap ordinary control flow in try/catch.
+  // An HTTP error status is an answer - 401 means re-auth, 409 means
+  // conflict - so it arrives as { error } and the caller branches on
+  // it. A transport failure is not an answer, so it throws. The
+  // generated client returns { error } for both; `response` is
+  // undefined exactly when the request never completed.
   //
-  // A transport failure is NOT an answer. There is no status, nothing
-  // to branch on, and the caller can only give up. fetch rejects for
-  // these and resolves for the first; the generated client returns
-  // { error } for both, so this puts the distinction back.
-  //
-  // `response` is undefined exactly when the request never completed,
-  // which is the test. throwOnError is not usable as a default here:
-  // it throws for a 404 too.
-  //
-  // What this returns stays the SERVER'S PARSED BODY, deliberately
-  // not wrapped in an Error class. The client uses ONE value for
-  // both outcomes - `y = await interceptor(...)`, then either
-  // `throw y` under throwOnError or `return { error: y }` without it
-  // - so a wrapper cannot apply to the throwing case alone. It would
-  // also reach consumers that forward the body onward, turning
-  // `reply.code(409).send(error)` into a response carrying our class
-  // name and internal URL instead of the API's own error.
-  //
-  // An API wanting an exception passes throwOnError per call and
-  // converts at its own boundary, where the body's shape is known.
+  // The thrown value stays the server's parsed body rather than a
+  // wrapper class, because consumers forward it onward - wrapping it
+  // would put our class name into their API's error responses.
   client.interceptors.error.use((error, response) => {
     if (response === undefined) {
       throw error instanceof Error ? error : new Error('request did not complete', { cause: error })

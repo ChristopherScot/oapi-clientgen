@@ -1,21 +1,10 @@
-// Package apiclient owns what a generated API client is made of,
-// beyond the code the generator itself emits.
+// Package apiclient renders the half of a generated client that the
+// generator does not write: retries that skip non-idempotent methods,
+// a circuit breaker, Retry-After honoured over local backoff, a
+// per-attempt timeout, and the identifying headers.
 //
-// A generated client is two halves. The generator - ogen for Go,
-// hey-api for TypeScript - writes the typed operations from the spec.
-// Everything that makes those operations safe to call is written here:
-// retries that skip non-idempotent methods, a circuit breaker, the
-// server's own Retry-After honoured over local backoff, a per-attempt
-// timeout, and the headers that let a server see which client is
-// calling it.
-//
-// It lives apart from internal/runtime because it is not a property of
-// a language runtime. The templates were under templates/go-service
-// only because the first thing to emit a TypeScript client happened to
-// be a Go service - and a client generated for a THIRD-PARTY spec, the
-// second consumer, has no runtime at all. Reaching into go-service for
-// them shipped a client whose own usage example named an npm package
-// that did not exist.
+// ogen and hey-api write the typed operations; these templates make
+// them safe to call, the same way in both languages.
 package apiclient
 
 import (
@@ -40,11 +29,6 @@ type File struct {
 }
 
 // Params is everything the client templates need, and nothing else.
-//
-// Deliberately not runtime.Params: that struct carries ports, images
-// and deploy settings a client knows nothing about, and passing it
-// here is what let Owner go unset and render an empty npm scope into
-// every third-party client.
 type Params struct {
 	// Name is the API this client talks to, for its doc comments.
 	Name string
@@ -64,45 +48,21 @@ type Params struct {
 	ImportPath string
 
 	// HasSecurity says the spec declares securitySchemes, which makes
-	// ogen's NewClient take a SecuritySource before its options. Our
-	// own constructor has to match that signature or it will not
-	// compile for such a spec - and pokedex has none while Zoom has
-	// one, so both shapes are real.
+	// ogen's NewClient take a SecuritySource before its options. The
+	// generated constructor has to match that signature.
 	HasSecurity bool
 
-	// Published says this client ships as an npm package of its own,
-	// with its own tsconfig.
+	// Published says this client ships as an npm package owning its
+	// own tsconfig, which decides two things.
 	//
-	// Owning that tsconfig is what decides both things this field
-	// controls, which is why one field is enough for two decisions.
+	// Client-Version comes from package.json when published, so it
+	// cannot disagree with the version a consumer installed, and from
+	// the spec's info.version when not.
 	//
-	// Client-Version: a published client reads it from package.json,
-	// so the header cannot disagree with the version a consumer
-	// installed. An unpublished one has no package.json and writes in
-	// the spec's info.version - the version of THEIR API, which is
-	// what a server reading the header wants to know.
-	//
-	// Import extensions: a published client writes '.ts', because its
-	// own tsconfig sets allowImportingTsExtensions and
-	// rewriteRelativeImportExtensions, so tsc rewrites them to '.js'
-	// on the way into dist/. An unpublished client is compiled by a
-	// tsconfig it does not own - it lives as source inside the
-	// consuming repo - and '.ts' there is TS5097 unless that repo
-	// also enables allowImportingTsExtensions and then either noEmit
-	// or the rewrite. Extensionless asks nothing of the consumer and
-	// typechecks under Bundler, node and nodenext alike.
-	//
-	// '.js' is not the answer for the unpublished case, though it is
-	// the usual ESM advice: the file on disk is .ts, so bare Node
-	// fails with ERR_MODULE_NOT_FOUND either way. Running these
-	// sources directly needs compiled output, which is what being
-	// published is for.
-	//
-	// That is also why a consumer running `node server.ts` rather
-	// than bundling is already served: it depends on the PUBLISHED
-	// client, resolves main to dist/, and gets JavaScript. Only a
-	// client generated into the consuming repo is unpublished, and
-	// that repo compiles it as part of its own build.
+	// Imports carry '.ts' when published, because that tsconfig
+	// rewrites them into dist/. Unpublished clients are compiled by a
+	// tsconfig they do not own, where '.ts' is TS5097, so they are
+	// extensionless.
 	Published bool
 }
 
@@ -190,34 +150,20 @@ func files(set []struct{ tmpl, path string }, p Params) ([]File, error) {
 	return out, nil
 }
 
-// Retired are files this package used to write and no longer does,
-// relative to the directory a client's support files live in.
+// Retired are files this package used to write and no longer does.
+// Dropping one from the lists above is not enough: the copy on disk
+// stays, owned by nobody, still telling its reader not to edit it.
 //
-// Dropping a file from the lists above is not enough on its own. The
-// copy already on disk stays there, in every repo that ever ran this,
-// now owned by nobody - drifting from a template that keeps moving
-// while still telling its reader not to edit it. Whoever writes these
-// files has to remove those too, which is what RemoveRetired is for.
-//
-// Only ever paths this package itself wrote, matched exactly.
-//
-// resilience.test.ts is deliberately absent. It was added to tsFiles
-// and taken back out before either was released, so no consumer ever
-// received one - an entry for it would be a deletion that can never
-// fire. An entry leaves this list the same way: once no supported
-// version of this tool still writes the file.
+// An entry leaves this list once no supported version still writes
+// the file. A file no consumer ever received does not need one.
 var Retired = []string{"client_test.go", "paging_test.go"}
 
 // WroteIt reports whether this package wrote body, by looking for the
-// marker on the FIRST line, or the second behind an eslint pragma.
-// Every template puts it in one of those two places.
+// marker on the first line, or the second behind an eslint pragma.
 //
-// Position matters, not just presence. A hand-written replacement for
-// a generated test is very likely to MENTION the thing it replaced -
-// "replaces the one generated by homelabctl, which was wrong" - and
-// searching anywhere else in the file reads that as a claim of
-// ownership and deletes someone's work. A byte window does not help:
-// in a short file the prose is inside it.
+// Position, not just presence: a hand-written replacement may well
+// mention the file it replaced, and searching the whole body would
+// read that as ownership and delete someone's work.
 func WroteIt(body []byte) bool {
 	for i, line := range bytes.SplitN(body, []byte("\n"), 3) {
 		if i >= 2 {
@@ -230,12 +176,9 @@ func WroteIt(body []byte) bool {
 	return false
 }
 
-// RemoveRetired deletes the Retired files under dir and returns the
-// ones it removed, so a caller can say so. Files that were never there
-// are not an error: a service scaffolded after they were dropped never
-// had them.
-//
-// It removes a file only if WroteIt claims it.
+// RemoveRetired deletes the Retired files under dir that WroteIt
+// claims, and returns their names so a caller can report them. A file
+// that was never there is not an error.
 func RemoveRetired(dir string) ([]string, error) {
 	var removed []string
 	for _, name := range Retired {
@@ -258,55 +201,28 @@ func RemoveRetired(dir string) ([]string, error) {
 	return removed, nil
 }
 
-// generatedMarker is the phrase that says a file came from here.
+// generatedMarker is what WroteIt matches on, so it cannot change:
+// the files it has to claim are the ones already on disk, written
+// before the rename. A file WroteIt stops claiming can never be
+// retired.
 //
-// It still says homelabctl, and must. This generator was extracted
-// from that tool, and the files WroteIt has to claim are the ones
-// ALREADY on disk in repos it wrote from there. Renaming the marker to
-// match this binary would silently stop recognising every one of them,
-// and a file WroteIt cannot claim can never be retired - it is
-// orphaned for good, in a repo we do not control.
-//
-// So the marker is history, not branding. The NOTICE below is where
-// this tool names itself, and it is free to be reworded because
-// nothing matches on it.
-//
-// Everything that writes a header writes this, through Header below.
-// It used to be eight hand-maintained copies, one per template plus
-// GeneratedHeader, in two wordings - which is how RemoveRetired came
-// to match a sentence ending in "." while every template ended it in
-// ":" and removed nothing at all.
+// The notice below is where this tool names itself. Nothing matches
+// on that, so it is free to be reworded.
 const generatedMarker = "Generated by homelabctl"
 
-// generatedNotice is the whole header, minus the comment syntax, with
-// one line per line of output.
-//
-// A const rather than a []string: a package-level slice is mutable
-// shared state - any code here could rewrite an element and change
-// what every generated file claims - and this is a fixed fact, not a
-// configurable one.
-//
-// A reader who finds one of these files has to know what will
-// overwrite their edit, and the answer is this tool - whatever is
-// driving it. homelabctl's regen runs it too.
-//
-// The first line opens with generatedMarker, which still says
-// homelabctl for the compatibility reason above; the rest names
-// oapiclient-gen, because that is what a reader needs to go and look
-// at.
+// generatedNotice is the header minus the comment syntax, one line
+// per line of output. A const rather than a slice, because a
+// package-level slice would be mutable shared state.
 const generatedNotice = generatedMarker + " (now oapiclient-gen). Do not edit:\n" +
 	"`oapiclient-gen generate` rewrites this file, so edits are lost\n" +
 	"silently. Change the template in oapiclient-gen instead."
 
-// Header returns the generated-file notice as line comments, each
-// prefixed with comment and terminated by a newline. It adds no blank
-// line after: a template that wants one writes it, and the TypeScript
-// templates deliberately run the next comment straight on.
+// Header returns the notice as line comments, each prefixed with
+// comment and terminated by a newline. No blank line after: a
+// template that wants one writes it.
 //
-// Templates call this as {{ "{{ header `//` }}" }} rather than
-// spelling the notice out, so the wording has one home. comment is
-// the language's line-comment token, because that is the only part
-// that differs between a .go and a .ts file.
+// Templates call this as {{ "{{ header `//` }}" }} so the wording has
+// one home.
 func Header(comment string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(generatedNotice, "\n") {

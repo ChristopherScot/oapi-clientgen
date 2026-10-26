@@ -191,11 +191,19 @@ func TestUnparseableRetryAfterFallsBackToThePolicy(t *testing.T) {
 // PUT and DELETE are both retryable and both carry bodies, so this is
 // reachable with the default policy.
 func TestRetriedRequestResendsItsBody(t *testing.T) {
+	// Guarded because the handler runs on net/http's own goroutine.
+	// Retries are sequential today, so nothing races - but the
+	// counters elsewhere in this file are atomic for the same reason,
+	// and a test should not be the one place shaped like a race.
+	var mu sync.Mutex
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
 		bodies = append(bodies, string(b))
-		if len(bodies) == 1 {
+		n := len(bodies)
+		mu.Unlock()
+		if n == 1 {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -352,10 +360,14 @@ func TestLateFailureMovesTheCooldown(t *testing.T) {
 // design - a fleet retrying in lockstep arrives as one wave - so this
 // pins the doubling without pinning the jitter.
 func TestExponentialRetryActuallyBacksOff(t *testing.T) {
+	var mu sync.Mutex
 	var times []time.Time
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
 		times = append(times, time.Now())
-		if len(times) < 3 {
+		n := len(times)
+		mu.Unlock()
+		if n < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}

@@ -13,18 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// `client` generates typed clients for an API somebody ELSE owns.
-//
-// The rest of this tool is for a service whose spec you write: init
-// scaffolds the server, regen keeps the clients level with it, and CI
-// fails when they drift. None of that applies to an API somebody else
-// publishes. You do not own their spec, cannot fix it, and get a new
-// one whenever they ship one - so the spec is an input to be fetched
-// and corrected rather than a source file to be maintained.
-//
-// That inversion is why this is its own command group rather than a flag
-// on regen: regen asks "is the generated code level with MY spec", and
-// here there is no my-spec to be level with.
+// ManifestName is the file clients are declared in.
 const ManifestName = "clients.yaml"
 
 // Manifest is clients.yaml: every third-party API this repo
@@ -63,6 +52,8 @@ type Client struct {
 	Package string `yaml:"package,omitempty"`
 }
 
+// Names are the clients in m, sorted - `list` prints them and the
+// "no such client" error offers them, so the order has to be stable.
 func Names(m *Manifest) []string {
 	out := make([]string, 0, len(m.Clients))
 	for name := range m.Clients {
@@ -79,6 +70,8 @@ func PackageFromDir(dir string) string {
 	return strings.ReplaceAll(base, "-", "")
 }
 
+// LoadManifest reads the manifest at explicit, or the nearest one at
+// or above the working directory, and returns its path with it.
 func LoadManifest(explicit string) (string, *Manifest, error) {
 	path := explicit
 	if path == "" {

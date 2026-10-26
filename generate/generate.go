@@ -77,16 +77,13 @@ func Generate(dir, name string, c Client, refresh bool) error {
 		return fmt.Errorf("re-encoding patched spec: %w", err)
 	}
 
-	// A real file on disk, because both generators take a path. Named
-	// for the client so a failure message points at something
-	// identifiable rather than a random temp name.
-	tmp, err := os.CreateTemp("", "homelabctl-"+name+"-*.json")
+	// A real file on disk, because both generators take a path.
+	tmp, err := os.CreateTemp("", "oapiclient-gen-"+name+"-*.json")
 	if err != nil {
 		return fmt.Errorf("staging the patched spec: %w", err)
 	}
 	// Close as well as Remove: Remove unlinks the path and leaves the
-	// descriptor open. Both ignored explicitly - a second Close is a
-	// no-op and there is nothing useful to do about a failed cleanup.
+	// descriptor open. Nothing useful to do if either fails.
 	defer func() {
 		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
@@ -94,17 +91,15 @@ func Generate(dir, name string, c Client, refresh bool) error {
 	if _, err := tmp.Write(patched); err != nil {
 		return fmt.Errorf("staging the patched spec: %w", err)
 	}
-	// Checked, unlike the deferred one: a write can report success and
-	// still fail to flush at close, which would hand the generator a
-	// truncated spec.
+	// Checked, unlike the deferred Close: a write can succeed and
+	// still fail to flush, handing the generator a truncated spec.
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("writing patched spec: %w", err)
 	}
 
-	// Client-Version reports the version of the API this client was
-	// generated against, which is the spec's own info.version. A spec
-	// without one is not an error: the header says "unknown" rather
-	// than claiming a version nobody published.
+	// Client-Version reports the API version this client was generated
+	// against. A spec without one says "unknown" rather than claiming
+	// a version nobody published.
 	apiVersion := "unknown"
 	if info, ok := doc["info"].(map[string]any); ok {
 		if v, ok := info["version"].(string); ok && v != "" {
@@ -220,11 +215,9 @@ func loadPatches(dir string, paths []string) ([]apispec.Op, error) {
 	return all, nil
 }
 
-// generateGoClient runs ogen against the patched spec.
-//
-// ogen.yml is written beside the output rather than passed as flags so
-// the generator settings are visible and editable in the repo, the way
-// a scaffolded service's is.
+// generateGoClient runs ogen against the patched spec. Its settings
+// go in ogen.yml beside the output rather than in flags, so they are
+// visible and editable in the repo.
 func generateGoClient(dir, name, apiVersion string, c Client, specPath string) error {
 	out := filepath.Join(dir, c.Out)
 	if err := os.MkdirAll(out, 0o755); err != nil {
@@ -237,10 +230,16 @@ func generateGoClient(dir, name, apiVersion string, c Client, specPath string) e
 	}
 
 	cfgPath := filepath.Join(out, "ogen.yml")
-	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+	// errors.Is, not os.IsNotExist: the latter answers "not found" to
+	// a permission error too, and would overwrite a config it could
+	// not read.
+	switch _, err := os.Stat(cfgPath); {
+	case errors.Is(err, fs.ErrNotExist):
 		if err := os.WriteFile(cfgPath, []byte(thirdPartyOgenConfig()), 0o644); err != nil {
 			return err
 		}
+	case err != nil:
+		return fmt.Errorf("reading %s: %w", cfgPath, err)
 	}
 
 	// --clean so a removed endpoint's file goes away. Without it a
@@ -274,13 +273,10 @@ func generateGoClient(dir, name, apiVersion string, c Client, specPath string) e
 	return nil
 }
 
-// generateTSClient writes a named-operation client, the same shape a
-// scaffolded service gets, so a third-party client reads like the ones
-// this tool generates for our own services.
+// generateTSClient writes a named-operation client.
 //
-// The config is written next to the output, and hey-api reads it from
-// there - it clears its output directory on every run, so that
-// directory holds nothing else.
+// The config sits next to the output because hey-api clears its
+// output directory on every run.
 func generateTSClient(dir, name, apiVersion string, c Client, specPath string) error {
 	out := filepath.Join(dir, c.Out)
 	if err := os.MkdirAll(out, 0o755); err != nil {
@@ -382,7 +378,7 @@ func toOpenAPI3(raw []byte, dir, name string) ([]byte, bool, error) {
 		return raw, false, nil
 	}
 
-	in, err := os.CreateTemp("", "homelabctl-"+name+"-v2-*.json")
+	in, err := os.CreateTemp("", "oapiclient-gen-"+name+"-v2-*.json")
 	if err != nil {
 		return nil, false, err
 	}
