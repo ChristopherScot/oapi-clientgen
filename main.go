@@ -13,12 +13,56 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 )
 
-// Version is set at build time via ldflags; "dev" refuses to self-update.
-var Version = "dev"
+// Version is set at build time via ldflags by the release workflow.
+//
+// `go install` passes no ldflags, so it stays empty there - but the
+// module version it was installed at is embedded in the binary, and
+// version() reads that instead. Without the fallback a go-installed
+// binary reports "dev" and refuses to self-update.
+var Version string
+
+// version is what this binary should call itself: the ldflags value,
+// else the module version it was built from, else "dev".
+func version() string {
+	var module string
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		module = bi.Main.Version
+	}
+	return pickVersion(Version, module)
+}
+
+// pickVersion is version()'s choice, separated from the build-info
+// lookup so it can be tested - a test binary has no module version of
+// its own to stand in for one.
+//
+// Only a released version counts. A build from a working tree reports
+// "(devel)", a pseudo-version derived from the commit, or a tag with
+// "+dirty" appended; none of them names a release that exists, and
+// updating from one would overwrite someone's own build with a release
+// they did not ask for.
+//
+// semver.IsValid rejects "(devel)" and "". Canonical differs from the
+// original exactly when there is build metadata, which is how "+dirty"
+// is caught - it is a suffix on an otherwise real tag.
+func pickVersion(ldflags, modver string) string {
+	switch {
+	case ldflags != "":
+		return ldflags
+	case !semver.IsValid(modver),
+		semver.Canonical(modver) != modver,
+		module.IsPseudoVersion(modver):
+		return "dev"
+	default:
+		return modver
+	}
+}
 
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
@@ -51,7 +95,7 @@ func versionCmd() *cobra.Command {
 		Short: "print the version",
 		Args:  cobra.NoArgs,
 		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println(Version)
+			fmt.Println(version())
 		},
 	}
 }

@@ -4,9 +4,48 @@ import (
 	"testing"
 )
 
-func TestVersionIsSet(t *testing.T) {
-	if Version == "" {
-		t.Error("Version is empty; it should default to \"dev\" and be set via ldflags at release")
+// A binary that cannot name itself cannot update itself: runUpdate
+// refuses to act on "dev".
+func TestVersionAlwaysAnswers(t *testing.T) {
+	if version() == "" {
+		t.Error("version() is empty; it must fall back to the build info, then to \"dev\"")
+	}
+}
+
+func TestPickVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name, ldflags, module, want string
+	}{
+		{"release binary", "v1.2.3", "v1.2.3", "v1.2.3"},
+		// go install sets no ldflags, but the module version it was
+		// installed at is embedded. Without this the binary reports
+		// "dev" and refuses to update itself.
+		{"go install", "", "v1.2.3", "v1.2.3"},
+		{"local go build", "", "(devel)", "dev"},
+		{"no build info at all", "", "", "dev"},
+		// A build from a working tree, which go embeds as a
+		// pseudo-version. It names no release, so updating from it
+		// would overwrite someone's own build.
+		{"pseudo-version", "", "v1.21.1-0.20261026015910-0fa740d72a1f", "dev"},
+		// What `go install` reports for an untagged module, and the
+		// form that slipped through a narrower check.
+		{"untagged pseudo-version", "", "v0.0.0-20261026020159-df3906439210", "dev"},
+		// A real prerelease tag is not a pseudo-version.
+		{"prerelease tag", "", "v1.2.3-rc1", "v1.2.3-rc1"},
+		{"dirty working tree", "", "v1.21.1-0.20261026015910-0fa740d72a1f+dirty", "dev"},
+		// A clean tag with +dirty appended: what go embeds for a
+		// working-tree build of a tagged checkout. IsPseudoVersion
+		// says no to this one, so Canonical has to catch it.
+		{"tagged but dirty", "", "v0.1.0+dirty", "dev"},
+		{"not a version at all", "", "garbage", "dev"},
+		{"ldflags wins", "v9.9.9", "v1.2.3", "v9.9.9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pickVersion(tc.ldflags, tc.module); got != tc.want {
+				t.Errorf("pickVersion(%q, %q) = %q, want %q",
+					tc.ldflags, tc.module, got, tc.want)
+			}
+		})
 	}
 }
 
