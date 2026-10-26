@@ -22,22 +22,43 @@ import (
 // fail the command, not hang a build.
 const fetchTimeout = 30 * time.Second
 
+// Generator runs the pipeline. The zero value reports progress to
+// stdout; set Log to send it somewhere else, or to io.Discard.
+type Generator struct {
+	Log io.Writer
+}
+
+func (g Generator) logf(format string, a ...any) {
+	w := g.Log
+	if w == nil {
+		w = os.Stdout
+	}
+	fmt.Fprintf(w, format, a...)
+}
+
+// Generate runs the whole pipeline for one client with the default
+// Generator: obtain the spec, patch it into a state the generators
+// accept, then generate.
+func Generate(dir, name string, c Client, refresh bool) error {
+	return Generator{}.Generate(dir, name, c, refresh)
+}
+
 // Generate runs the whole pipeline for one client: obtain the
 // spec, patch it into a state the generators accept, then generate.
 //
 // The patched spec is written to a temporary file rather than over the
 // vendored one. The vendored copy is what upstream published, so a
 // refresh diffs against their change and not against ours.
-func Generate(dir, name string, c Client, refresh bool) error {
+func (g Generator) Generate(dir, name string, c Client, refresh bool) error {
 	if c.Out == "" {
-		return fmt.Errorf("out is required")
+		return fmt.Errorf("%s: out is required", name)
 	}
 
 	raw, source, err := obtainSpec(dir, c, refresh)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s: spec from %s\n", name, source)
+	g.logf("%s: spec from %s\n", name, source)
 
 	// Convert BEFORE patching. A Swagger 2.0 document keeps parameters
 	// and definitions at the root, so a patch written against
@@ -50,7 +71,7 @@ func Generate(dir, name string, c Client, refresh bool) error {
 		return err
 	}
 	if converted {
-		fmt.Println("  converted Swagger 2.0 -> OpenAPI 3.0")
+		g.logf("  converted Swagger 2.0 -> OpenAPI 3.0\n")
 	}
 
 	doc, err := apispec.Decode(raw)
@@ -68,7 +89,7 @@ func Generate(dir, name string, c Client, refresh bool) error {
 			return err
 		}
 		for _, note := range applied {
-			fmt.Println("  patch:", note)
+			g.logf("  patch: %s\n", note)
 		}
 	}
 
@@ -114,11 +135,11 @@ func Generate(dir, name string, c Client, refresh bool) error {
 	for _, lang := range langs {
 		switch lang {
 		case "go":
-			if err := generateGoClient(dir, name, apiVersion, c, tmp.Name()); err != nil {
+			if err := g.generateGoClient(dir, name, apiVersion, c, tmp.Name()); err != nil {
 				return err
 			}
 		case "ts":
-			if err := generateTSClient(dir, name, apiVersion, c, tmp.Name()); err != nil {
+			if err := g.generateTSClient(dir, name, apiVersion, c, tmp.Name()); err != nil {
 				return err
 			}
 		default:
@@ -218,7 +239,7 @@ func loadPatches(dir string, paths []string) ([]apispec.Op, error) {
 // generateGoClient runs ogen against the patched spec. Its settings
 // go in ogen.yml beside the output rather than in flags, so they are
 // visible and editable in the repo.
-func generateGoClient(dir, name, apiVersion string, c Client, specPath string) error {
+func (g Generator) generateGoClient(dir, name, apiVersion string, c Client, specPath string) error {
 	out := filepath.Join(dir, c.Out)
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", c.Out, err)
@@ -263,13 +284,13 @@ func generateGoClient(dir, name, apiVersion string, c Client, specPath string) e
 	if err != nil {
 		return err
 	}
-	if err := syncSupportFiles(out, apiclient.Go, apiclient.Params{
+	if err := g.syncSupportFiles(out, apiclient.Go, apiclient.Params{
 		Name: name, Version: apiVersion, Package: pkg,
 		HasSecurity: hasSecurity,
 	}); err != nil {
 		return err
 	}
-	fmt.Printf("  go: %s\n", c.Out)
+	g.logf("  go: %s\n", c.Out)
 	return nil
 }
 
@@ -277,7 +298,7 @@ func generateGoClient(dir, name, apiVersion string, c Client, specPath string) e
 //
 // The config sits next to the output because hey-api clears its
 // output directory on every run.
-func generateTSClient(dir, name, apiVersion string, c Client, specPath string) error {
+func (g Generator) generateTSClient(dir, name, apiVersion string, c Client, specPath string) error {
 	out := filepath.Join(dir, c.Out)
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", c.Out, err)
@@ -300,7 +321,7 @@ func generateTSClient(dir, name, apiVersion string, c Client, specPath string) e
 	if err := apiclient.MarkGenerated(filepath.Join(out, "generated")); err != nil {
 		return err
 	}
-	if err := syncSupportFiles(out, apiclient.TypeScript, apiclient.Params{
+	if err := g.syncSupportFiles(out, apiclient.TypeScript, apiclient.Params{
 		Name: name, Version: apiVersion,
 		// Published is left false: this client lives in the repo that
 		// generated it, so a consumer imports the directory rather
@@ -310,7 +331,7 @@ func generateTSClient(dir, name, apiVersion string, c Client, specPath string) e
 	}); err != nil {
 		return err
 	}
-	fmt.Printf("  ts: %s\n", c.Out)
+	g.logf("  ts: %s\n", c.Out)
 	return nil
 }
 
@@ -422,7 +443,7 @@ func toOpenAPI3(raw []byte, dir, name string) ([]byte, bool, error) {
 // write and no longer does. A caller must not be able to do one
 // without the other, or a dropped file lives on in the output
 // directory with nobody left to update it.
-func syncSupportFiles(out string, set func(apiclient.Params) ([]apiclient.File, error), p apiclient.Params) error {
+func (g Generator) syncSupportFiles(out string, set func(apiclient.Params) ([]apiclient.File, error), p apiclient.Params) error {
 	files, err := set(p)
 	if err != nil {
 		return err
@@ -441,7 +462,7 @@ func syncSupportFiles(out string, set func(apiclient.Params) ([]apiclient.File, 
 	// it is what tells a consumer who had edited the file to reach
 	// for git.
 	for _, name := range removed {
-		fmt.Printf("  removed %s (no longer generated)\n", filepath.Join(out, name))
+		g.logf("  removed %s (no longer generated)\n", filepath.Join(out, name))
 	}
 	return nil
 }
