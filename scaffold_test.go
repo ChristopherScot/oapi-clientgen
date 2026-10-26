@@ -33,6 +33,10 @@ func TestPickVersion(t *testing.T) {
 		// A real prerelease tag is not a pseudo-version.
 		{"prerelease tag", "", "v1.2.3-rc1", "v1.2.3-rc1"},
 		{"dirty working tree", "", "v1.21.1-0.20261026015910-0fa740d72a1f+dirty", "dev"},
+		// A clean tag with +dirty appended: what go embeds for a
+		// working-tree build of a tagged checkout. IsPseudoVersion
+		// says no to this one, so Canonical has to catch it.
+		{"tagged but dirty", "", "v0.1.0+dirty", "dev"},
 		{"not a version at all", "", "garbage", "dev"},
 		{"ldflags wins", "v9.9.9", "v1.2.3", "v9.9.9"},
 	} {

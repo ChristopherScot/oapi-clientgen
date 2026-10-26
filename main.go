@@ -43,16 +43,21 @@ func version() string {
 // its own to stand in for one.
 //
 // Only a released version counts. A build from a working tree reports
-// "(devel)" or a pseudo-version derived from the commit it was built
-// at; neither names a release that exists, and updating from one would
-// overwrite someone's own build with a release they did not ask for.
-// semver.IsValid rejects "(devel)" and "" along with anything else
-// that is not a version.
+// "(devel)", a pseudo-version derived from the commit, or a tag with
+// "+dirty" appended; none of them names a release that exists, and
+// updating from one would overwrite someone's own build with a release
+// they did not ask for.
+//
+// semver.IsValid rejects "(devel)" and "". Canonical differs from the
+// original exactly when there is build metadata, which is how "+dirty"
+// is caught - it is a suffix on an otherwise real tag.
 func pickVersion(ldflags, modver string) string {
 	switch {
 	case ldflags != "":
 		return ldflags
-	case !semver.IsValid(modver) || module.IsPseudoVersion(modver):
+	case !semver.IsValid(modver),
+		semver.Canonical(modver) != modver,
+		module.IsPseudoVersion(modver):
 		return "dev"
 	default:
 		return modver
