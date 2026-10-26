@@ -83,11 +83,12 @@ func render(name string, p Params) (string, error) {
 	return buf.String(), nil
 }
 
-// These lists are the one inventory of what each client is made of. A consumer decides WHERE they go; what they ARE is decided
-// here, so adding a file does not mean remembering a second list.
 // templateFile is a template and where its output goes.
 type templateFile struct{ tmpl, path string }
 
+// These lists are the one inventory of what each client is made of.
+// A consumer decides WHERE they go; what they ARE is decided here, so
+// adding a file does not mean remembering a second list.
 var tsFiles = []templateFile{
 	{"ts_resilience.ts.tmpl", "resilience.ts"},
 	{"ts_index.ts.tmpl", "index.ts"},
