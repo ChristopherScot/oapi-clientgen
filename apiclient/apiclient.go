@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 )
@@ -84,12 +85,15 @@ func render(name string, p Params) (string, error) {
 
 // These lists are the one inventory of what each client is made of. A consumer decides WHERE they go; what they ARE is decided
 // here, so adding a file does not mean remembering a second list.
-var tsFiles = []struct{ tmpl, path string }{
+// templateFile is a template and where its output goes.
+type templateFile struct{ tmpl, path string }
+
+var tsFiles = []templateFile{
 	{"ts_resilience.ts.tmpl", "resilience.ts"},
 	{"ts_index.ts.tmpl", "index.ts"},
 }
 
-var goFiles = []struct{ tmpl, path string }{
+var goFiles = []templateFile{
 	{"go_client.go.tmpl", "client.go"},
 	{"go_paging.go.tmpl", "paging.go"},
 }
@@ -114,11 +118,11 @@ var goFiles = []struct{ tmpl, path string }{
 // project with no @types/node. Rewriting them for vitest would tie
 // this generator to one consumer's choice of runner, and the next
 // consumer's choice would be a second copy.
-var tsTestFiles = []struct{ tmpl, path string }{
+var tsTestFiles = []templateFile{
 	{"ts_resilience_test.ts.tmpl", "resilience.test.ts"},
 }
 
-var goTestFiles = []struct{ tmpl, path string }{
+var goTestFiles = []templateFile{
 	{"go_client_test.go.tmpl", "client_test.go"},
 	{"go_paging_test.go.tmpl", "paging_test.go"},
 }
@@ -138,7 +142,7 @@ func Go(p Params) ([]File, error) { return files(goFiles, p) }
 // they do not ship.
 func GoTests(p Params) ([]File, error) { return files(goTestFiles, p) }
 
-func files(set []struct{ tmpl, path string }, p Params) ([]File, error) {
+func files(set []templateFile, p Params) ([]File, error) {
 	out := make([]File, 0, len(set))
 	for _, f := range set {
 		body, err := render(f.tmpl, p)
@@ -150,13 +154,18 @@ func files(set []struct{ tmpl, path string }, p Params) ([]File, error) {
 	return out, nil
 }
 
-// Retired are files this package used to write and no longer does.
+// retired are files this package used to write and no longer does.
 // Dropping one from the lists above is not enough: the copy on disk
 // stays, owned by nobody, still telling its reader not to edit it.
 //
 // An entry leaves this list once no supported version still writes
 // the file. A file no consumer ever received does not need one.
-var Retired = []string{"client_test.go", "paging_test.go"}
+var retired = []string{"client_test.go", "paging_test.go"}
+
+// Retired is a copy of that list. A copy, and unexported underneath,
+// because an importer reassigning it would change which files
+// RemoveRetired deletes from somebody else's repo.
+func Retired() []string { return slices.Clone(retired) }
 
 // WroteIt reports whether this package wrote body, by looking for the
 // marker on the first line, or the second behind an eslint pragma.
@@ -181,7 +190,7 @@ func WroteIt(body []byte) bool {
 // that was never there is not an error.
 func RemoveRetired(dir string) ([]string, error) {
 	var removed []string
-	for _, name := range Retired {
+	for _, name := range retired {
 		path := filepath.Join(dir, name)
 		body, err := os.ReadFile(path)
 		if errors.Is(err, fs.ErrNotExist) {
