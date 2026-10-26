@@ -21,7 +21,7 @@ const (
 
 	// A release is per REPOSITORY. In a monorepo that is the PARENT repo,
 	// not the service.
-	repoName = "oapiclient-gen"
+	repoName = "oapi-clientgen"
 
 	tagPrefix = ""
 
@@ -76,7 +76,7 @@ func runUpdate(checkOnly bool) error {
 	}
 	fmt.Printf("new version available: %s\n", latest)
 	if checkOnly {
-		fmt.Println("run 'oapiclient-gen update' to install it")
+		fmt.Println("run 'oapi-clientgen update' to install it")
 		return nil
 	}
 
@@ -116,7 +116,7 @@ func latestRelease() (*githubRelease, error) {
 	}
 	rel := pickRelease(rels)
 	if rel == nil {
-		return nil, fmt.Errorf("no oapiclient-gen release found in %s/%s", repoOwner, repoName)
+		return nil, fmt.Errorf("no oapi-clientgen release found in %s/%s", repoOwner, repoName)
 	}
 	return rel, nil
 }
@@ -154,7 +154,7 @@ func hasAsset(r *githubRelease, name string) bool {
 }
 
 func assetName() string {
-	return fmt.Sprintf("oapiclient-gen_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	return fmt.Sprintf("oapi-clientgen_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 }
 
 func releaseVersion(tag string) string {
@@ -213,12 +213,12 @@ func installFrom(url string) error {
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return fmt.Errorf("archive contained no oapiclient-gen binary")
+			return fmt.Errorf("archive contained no oapi-clientgen binary")
 		}
 		if err != nil {
 			return fmt.Errorf("read archive: %w", err)
 		}
-		if h.Name != "oapiclient-gen" && h.Name != "./oapiclient-gen" {
+		if h.Name != "oapi-clientgen" && h.Name != "./oapi-clientgen" {
 			continue
 		}
 		if h.Size > maxBinarySize {

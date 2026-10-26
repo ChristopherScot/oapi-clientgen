@@ -9,7 +9,7 @@
 // every call. createClient builds a separate one, for several
 // policies or several hosts.
 //
-// Written from an oapiclient-gen template rather than by hey-api:
+// Written from an oapi-clientgen template rather than by hey-api:
 // hey-api owns generated/ and clears it on every run, so this file
 // sits above it and decides what the package's surface is.
 export * from './generated/sdk.gen{{ if .Published }}.ts{{ end }}'

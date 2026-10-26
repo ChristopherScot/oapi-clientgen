@@ -2,7 +2,7 @@
 # generated `update` command looks for. Triggered by a VERSION change so a
 # release is deliberate - but tests run on every push and PR, or a CLI repo
 # would only ever be tested at release time.
-name: oapiclient-gen
+name: oapi-clientgen
 
 on:
   push:
@@ -109,8 +109,8 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
-      # Asset names must match what `oapiclient-gen update` looks for:
-      # oapiclient-gen_<goos>_<goarch>.tar.gz containing the bare binary.
+      # Asset names must match what `oapi-clientgen update` looks for:
+      # oapi-clientgen_<goos>_<goarch>.tar.gz containing the bare binary.
       # Version is injected here; without it a released binary reports
       # "dev" and refuses to update itself.
       - name: Cross-compile
@@ -121,10 +121,10 @@ jobs:
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             GOOS="${target%/*}"; GOARCH="${target#*/}"
             mkdir -p "dist/$GOOS/$GOARCH"
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" -o "dist/$GOOS/$GOARCH/oapiclient-gen" .
-            tar -czf "oapiclient-gen_${GOOS}_${GOARCH}.tar.gz" -C "dist/$GOOS/$GOARCH" "oapiclient-gen"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" -o "dist/$GOOS/$GOARCH/oapi-clientgen" .
+            tar -czf "oapi-clientgen_${GOOS}_${GOARCH}.tar.gz" -C "dist/$GOOS/$GOARCH" "oapi-clientgen"
           done
-          sha256sum oapiclient-gen_*.tar.gz > checksums.txt
+          sha256sum oapi-clientgen_*.tar.gz > checksums.txt
 
       - uses: softprops/action-gh-release@v2
         if: steps.gate.outputs.go == 'true'
@@ -137,5 +137,5 @@ jobs:
           # first. A dedicated repo has one release line, so no prefix.
           tag_name: ${{ steps.gate.outputs.version }}
           files: |
-            oapiclient-gen_*.tar.gz
+            oapi-clientgen_*.tar.gz
             checksums.txt

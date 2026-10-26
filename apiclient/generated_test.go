@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherScot/oapiclient-gen/apiclient"
-	"github.com/ChristopherScot/oapiclient-gen/codegen"
+	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-clientgen/codegen"
 )
 
 // The Go client template ships tests of its own, and until now they

@@ -1,4 +1,4 @@
-# oapiclient-gen
+# oapi-clientgen
 #
 # Include Makefile.local for service-specific setup; it survives regenerate.
 
@@ -7,7 +7,7 @@ SHELL := /bin/bash
 
 .PHONY: help
 help:
-	@echo "oapiclient-gen"
+	@echo "oapi-clientgen"
 	@echo
 	@echo "  make build      compile"
 	@echo "  make test       vet and tests (what CI runs)"
@@ -22,7 +22,7 @@ endif
 # -o and the package are load-bearing.
 .PHONY: build
 build:
-	go build -o oapiclient-gen .
+	go build -o oapi-clientgen .
 
 # -race matches CI.
 .PHONY: test
@@ -43,6 +43,6 @@ regen:
 .PHONY: clean
 clean:
 	go clean
-	rm -f oapiclient-gen
+	rm -f oapi-clientgen
 
 -include Makefile.local
