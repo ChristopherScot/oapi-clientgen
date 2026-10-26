@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherScot/oapiclient-gen/apiclient"
+	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
 
 // The TypeScript counterpart of TestTheGeneratedTestsPass, and the

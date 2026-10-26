@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ChristopherScot/oapiclient-gen/apiclient"
+	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
 
 // Generator versions are pinned exactly. With @latest a build breaks

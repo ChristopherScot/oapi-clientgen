@@ -1,4 +1,4 @@
-// oapiclient-gen
+// oapi-clientgen
 package main
 
 // THIS WHOLE REPO IS YOURS. Nothing rewrites these files after `init`.
@@ -6,7 +6,7 @@ package main
 //
 //   - VERSION drives releases: CI publishes only when its first line
 //     changes on main, tagging what it says.
-//   - update.go downloads `oapiclient-gen_<os>_<arch>.tar.gz` from the
+//   - update.go downloads `oapi-clientgen_<os>_<arch>.tar.gz` from the
 //     latest GitHub release; CI builds assets with exactly that name.
 //     Rename either side and self-update fails.
 
@@ -66,7 +66,7 @@ func pickVersion(ldflags, modver string) string {
 
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "oapiclient-gen",
+		Use:   "oapi-clientgen",
 		Short: "generate typed clients from an OpenAPI spec",
 		Long: `Generate typed Go and TypeScript clients from an OpenAPI spec,
 with a transport that already does timeouts, retries, Retry-After and
@@ -83,7 +83,7 @@ Declare clients in clients.yaml and run with no arguments, or point
 	root.InitDefaultCompletionCmd()
 	for _, c := range root.Commands() {
 		if c.Name() == "completion" {
-			c.AddCommand(completionInstallCmd("oapiclient-gen"))
+			c.AddCommand(completionInstallCmd("oapi-clientgen"))
 		}
 	}
 	return root

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherScot/oapiclient-gen/apiclient"
+	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
 
 // configPaths pulls input and output.path back out of a generated

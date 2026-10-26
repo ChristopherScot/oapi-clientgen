@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ChristopherScot/oapiclient-gen/apiclient"
+	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
 
 // A retired file as it sits in a consumer's repo today: the header

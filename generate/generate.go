@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ChristopherScot/oapiclient-gen/apiclient"
-	"github.com/ChristopherScot/oapiclient-gen/apispec"
-	"github.com/ChristopherScot/oapiclient-gen/codegen"
+	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-clientgen/apispec"
+	"github.com/ChristopherScot/oapi-clientgen/codegen"
 	"gopkg.in/yaml.v3"
 )
 
@@ -99,7 +99,7 @@ func (g Generator) Generate(dir, name string, c Client, refresh bool) error {
 	}
 
 	// A real file on disk, because both generators take a path.
-	tmp, err := os.CreateTemp("", "oapiclient-gen-"+name+"-*.json")
+	tmp, err := os.CreateTemp("", "oapi-clientgen-"+name+"-*.json")
 	if err != nil {
 		return fmt.Errorf("staging the patched spec: %w", err)
 	}
@@ -399,7 +399,7 @@ func toOpenAPI3(raw []byte, dir, name string) ([]byte, bool, error) {
 		return raw, false, nil
 	}
 
-	in, err := os.CreateTemp("", "oapiclient-gen-"+name+"-v2-*.json")
+	in, err := os.CreateTemp("", "oapi-clientgen-"+name+"-v2-*.json")
 	if err != nil {
 		return nil, false, err
 	}

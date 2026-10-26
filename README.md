@@ -1,4 +1,4 @@
-# oapiclient-gen
+# oapi-clientgen
 
 Generates typed Go and TypeScript clients from an OpenAPI spec, with a
 transport that already handles the things a generated client usually
@@ -16,19 +16,19 @@ which still drives it for services it scaffolds.
 ## Install
 
 ```sh
-go install github.com/ChristopherScot/oapiclient-gen@latest
+go install github.com/ChristopherScot/oapi-clientgen@latest
 ```
 
 Or download a binary from
-[Releases](https://github.com/ChristopherScot/oapiclient-gen/releases).
-After that, `oapiclient-gen update` pulls the newest one.
+[Releases](https://github.com/ChristopherScot/oapi-clientgen/releases).
+After that, `oapi-clientgen update` pulls the newest one.
 
 ## Try a spec
 
 No config, nothing committed:
 
 ```sh
-oapiclient-gen generate --spec https://example.com/openapi.json \
+oapi-clientgen generate --spec https://example.com/openapi.json \
   --out ./internal/acmeapi
 ```
 
@@ -49,9 +49,9 @@ clients:
 ```
 
 ```sh
-oapiclient-gen list
-oapiclient-gen generate
-oapiclient-gen generate acme --refresh
+oapi-clientgen list
+oapi-clientgen generate
+oapi-clientgen generate acme --refresh
 ```
 
 A remote spec is **vendored on first use** and reused after that, so a
@@ -96,7 +96,7 @@ The CLI is a thin shell over `generate`; everything it does is
 available directly.
 
 ```go
-import "github.com/ChristopherScot/oapiclient-gen/generate"
+import "github.com/ChristopherScot/oapi-clientgen/generate"
 
 err := generate.Generate(".", "acme", generate.Client{
     Spec:      "https://example.com/openapi.json",

@@ -5,4 +5,4 @@ dist/
 # MODULE PATH - not the service name, which can differ. Without this it
 # gets committed on the first `git add -A`, and a multi-megabyte binary
 # in git history is not removable by a later .gitignore.
-/oapiclient-gen
+/oapi-clientgen

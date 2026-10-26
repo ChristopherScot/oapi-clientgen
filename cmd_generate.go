@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ChristopherScot/oapiclient-gen/generate"
+	"github.com/ChristopherScot/oapi-clientgen/generate"
 	"github.com/spf13/cobra"
 )
 
@@ -65,9 +65,9 @@ A remote spec is vendored on first use and reused after that, so a
 build does not depend on a third party being reachable. --refresh
 re-fetches it, which is how an upstream change enters the repo: as a
 reviewable diff.`,
-		Example: `  oapiclient-gen generate
-  oapiclient-gen generate acme --refresh
-  oapiclient-gen generate --spec ./acme.json --out ./internal/acmeapi`,
+		Example: `  oapi-clientgen generate
+  oapi-clientgen generate acme --refresh
+  oapi-clientgen generate --spec ./acme.json --out ./internal/acmeapi`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			// --spec is the no-manifest path: one client, named by its
 			// output directory, nothing committed. It exists so a spec
