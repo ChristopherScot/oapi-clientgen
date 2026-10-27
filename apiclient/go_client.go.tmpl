@@ -357,6 +357,11 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 		// seconds becomes -808ms, which then reads as shorter than max
 		// and retries instantly - the precise inversion this function
 		// exists to prevent. Compare in seconds, where nothing wraps.
+		//
+		// The date branch below needs no such bound: time.Until
+		// saturates at MaxInt64 rather than wrapping, so a far-future
+		// date stays positive and is caught by the cap. Multiplication
+		// is the only path here that can turn a long wait negative.
 		if int64(secs) > int64(max/time.Second) {
 			return 0, false, true
 		}

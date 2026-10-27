@@ -145,9 +145,6 @@ export const exponentialRetry: RetryPolicy = {
 
 export const noRetry: RetryPolicy = { backoffs: () => [], retry: () => false }
 
-// Reads the server's own answer to "when should I come back". RFC 9110
-// allows either a delay in seconds or an HTTP-date. Capped so an
-// hour-long value cannot masquerade as a hang.
 /** The server's own answer, and whether it asked for longer than we
  *  will wait. `tooLong` means STOP - returning undefined for it sent
  *  the caller back to its own backoff, so a server asking for an hour
@@ -209,16 +206,10 @@ export function retryAfterMs(
   } else {
     return { tooLong: false }
   }
-  // Over the cap means STOP, not "wait maxMs instead". Stopping rather
-  // than clamping is a deliberate choice, and not what the wider
-  // ecosystem does: urllib3 sleeps for its retry_after_max instead (6
-  // hours by default). At our 30s default that would be wrong. A
-  // server asking for longer than 30s is saying "not now", and
-  // anything that must be retried minutes or hours later has to
-  // survive a deploy or an eviction, so it belongs in a queue or a
-  // scheduled job - not parked inside one request. Fail fast; the
-  // Response still carries Retry-After for whoever schedules it, and
-  // this parser is exported so they need not write it again.
+  // Over the cap means STOP, not "wait maxMs instead". That is a
+  // deliberate departure from the ecosystem, and the Go client's
+  // retryAfter carries the reasoning - it is one decision, so it is
+  // written down once.
   return ms > maxMs ? { tooLong: true } : { ms, tooLong: false }
 }
 
