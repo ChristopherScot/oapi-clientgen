@@ -146,21 +146,12 @@ export const exponentialRetry: RetryPolicy = {
 export const noRetry: RetryPolicy = { backoffs: () => [], retry: () => false }
 
 /** The server's own answer, and whether it asked for longer than we
- *  will wait. `tooLong` means STOP - returning undefined for it sent
- *  the caller back to its own backoff, so a server asking for an hour
- *  was retried in a second, which is the opposite of what it asked
- *  for at the moment it was most emphatic. */
-// The three date formats RFC 9110 requires a recipient to accept:
-// IMF-fixdate, obsolete RFC 850, and asctime. Go's http.ParseTime
-// takes exactly these three, so the two clients agree on what counts
-// as a date.
-//
-// Matched on shape, and with the real day and month names spelled
-// out, because Date.parse is far looser than the spec on both axes:
-// '-5', '+5' and ' 5 .5' all read as dates in 2001, and V8 ignores a
-// bogus weekday entirely - 'Xyz, 21 Oct 2025 07:28:00 GMT' parses
-// fine. Go rejects that, so a loose shape check would leave the two
-// disagreeing on the same header.
+ *  will wait. `tooLong` means STOP: the caller must give up rather
+ *  than substitute a shorter wait of its own. */
+// The three date formats RFC 9110 requires a recipient to accept, and
+// exactly what Go's http.ParseTime takes. Day and month names are
+// spelled out because V8 ignores a bogus weekday: Date.parse reads
+// 'Xyz, 21 Oct 2025 07:28:00 GMT' happily, Go does not.
 const DAY = '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)'
 const DAYLONG = '(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)'
 const MON = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
@@ -181,20 +172,10 @@ export function retryAfterMs(
   const v = res?.headers?.get('retry-after')
   if (!v) return { tooLong: false }
 
-  // Both forms matched on SHAPE, and anything else refused.
-  //
-  // Number() and Date.parse are each far looser than RFC 9110.
-  // Number('1.5') is a number but not an integer, so it fell through
-  // to Date.parse, which reads "1.5" as a date in 2001 and clamps the
-  // wait to zero - a server asking for a second and a half got
-  // hammered immediately. Date.parse is just as happy with '-5',
-  // '+5' and ' 5 .5'. Number() also takes '0x10' and '1e3'.
-  //
-  // So: digits only for delay-seconds, and one of the three date
-  // spellings RFC 9110 requires a recipient to accept (see
-  // isHTTPDate). Anything else means we did not understand the header
-  // and fall back to the policy's own backoff, which is what the Go
-  // client does via strconv.Atoi and http.ParseTime.
+  // Matched on shape, because Number() and Date.parse are far looser
+  // than RFC 9110: Date.parse reads '1.5', '-5' and ' 5 .5' as dates
+  // in 2001, and Number() takes '0x10' and '1e3'. Anything unmatched
+  // falls back to the policy's own backoff.
   let ms
   const t = v.trim()
   if (/^\+?[0-9]+$/.test(t)) {
@@ -206,10 +187,8 @@ export function retryAfterMs(
   } else {
     return { tooLong: false }
   }
-  // Over the cap means STOP, not "wait maxMs instead". That is a
-  // deliberate departure from the ecosystem, and the Go client's
-  // retryAfter carries the reasoning - it is one decision, so it is
-  // written down once.
+  // Over the cap means STOP, not "wait maxMs instead"; the Go client's
+  // retryAfter carries the reasoning.
   return ms > maxMs ? { tooLong: true } : { ms, tooLong: false }
 }
 

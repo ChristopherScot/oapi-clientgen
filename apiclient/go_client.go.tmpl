@@ -352,21 +352,14 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 		if secs < 0 {
 			return 0, false, false
 		}
-		// Bound before multiplying. time.Duration is an int64 of
-		// nanoseconds, so any value past this wraps: 9223372036854775
-		// seconds becomes -808ms, which then reads as shorter than max
-		// and retries instantly - the precise inversion this function
-		// exists to prevent. Compare in seconds, where nothing wraps.
-		//
-		// The date branch below needs no such bound: time.Until
-		// saturates at MaxInt64 rather than wrapping, so a far-future
-		// date stays positive and is caught by the cap. Multiplication
-		// is the only path here that can turn a long wait negative.
+		// Duration is int64 nanoseconds: 9223372036854775 seconds
+		// multiplies out to -808ms, which reads as under max.
 		if int64(secs) > int64(max/time.Second) {
 			return 0, false, true
 		}
 		d = time.Duration(secs) * time.Second
 	} else if t, err := http.ParseTime(strings.TrimSpace(v)); err == nil {
+		// time.Until saturates rather than wrapping, so no bound here.
 		d = time.Until(t)
 		if d < 0 {
 			d = 0
@@ -375,22 +368,10 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 		return 0, false, false
 	}
 
-	// Longer than we are willing to wait means STOP, not "ignore the
-	// header". Returning false here sent the caller back to the
-	// policy's own backoff, so a server asking for an hour was
-	// retried in a second - the opposite of what it asked for, at the
-	// moment it was most emphatic. maxRetryAfter is a bound on our
-	// patience, not a filter on the server's answer.
-	//
-	// Stopping rather than clamping to max is a deliberate choice, and
-	// not what the wider ecosystem does: urllib3 sleeps for its
-	// retry_after_max instead (6 hours by default). At our 30s default
-	// that would be wrong. A server asking for longer than 30s is
-	// saying "not now", and anything that must be retried minutes or
-	// hours later has to survive a deploy or an eviction, so it
-	// belongs in a queue or a scheduled job - not parked on a
-	// connection and a goroutine inside one request. Fail fast; the
-	// response still carries Retry-After for whoever schedules it.
+	// Stop rather than clamp to max, which is what urllib3 does: past
+	// our patience the work belongs in a queue that survives a deploy,
+	// not parked on a connection. The response still carries
+	// Retry-After for whoever schedules it.
 	if d > max {
 		return 0, false, true
 	}
