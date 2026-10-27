@@ -177,10 +177,10 @@ type Breaker struct {
 	// FailedRequests is how many consecutive failed REQUESTS open the
 	// circuit. A request that exhausted its retries counts once.
 	//
-	// Zero still lets everything through, so a Breaker built by hand
-	// rather than by WithBreaker does not refuse all traffic. Reach
-	// for WithBreaker instead: breaking is off until asked for, and
-	// then this value is given explicitly.
+	// Zero lets everything through. Use WithBreaker, which sets it
+	// explicitly. The TypeScript client's new Breaker() opens after 5
+	// instead, because a constructor can carry a default and a zero
+	// value cannot: do not "fix" either to match.
 	FailedRequests int
 	Cooldown       time.Duration
 

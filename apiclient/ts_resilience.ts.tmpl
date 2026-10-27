@@ -4,14 +4,11 @@
 // client in api/client.go - 5s timeout, one retry - because both
 // clients failing the same way is the point.
 //
-// They differ in one place, and it is a language difference rather
-// than a decision: `new Breaker()` here opens after 5 failures, while
-// Go's `&Breaker{}` lets everything through, because a zero value
-// cannot carry a default. Both are tested. Omit `breaker` (nil, in
-// Go) to disable breaking in either.
+// Breaking is off in both until asked for: `breaker: new Breaker(5,
+// 30_000)` here, `WithBreaker(5, 30*time.Second)` in Go.
 //
 //   import { createClient, listThings } from '{{ .ImportPath }}'
-//   const client = createClient({ baseUrl: 'https://{{ .Name }}' })
+//   const client = createClient({ baseUrl: 'https://{{ .Name }}', name: 'my-service' })
 //   const { data, error } = await listThings({ client })
 //
 // Everything below is generator-agnostic: it wraps `fetch` and knows
@@ -34,8 +31,8 @@ export const ClientVersion: string = pkg.version{{ else }}// Written in: this cl
 export const ClientVersion = '{{ .Version }}'{{ end }}
 export const ClientVersionHeader = 'Client-Version'
 
-// Set via createClient({ name: 'my-service' }); No X- prefix on either:
-// RFC 6648 deprecated it in 2012.
+// Required by createClient and createResilientFetch. No X- prefix on
+// either: RFC 6648 deprecated it in 2012.
 export const ClientNameHeader = 'Client-Name'
 
 export interface RetryPolicy {
