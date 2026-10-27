@@ -54,6 +54,13 @@ export interface ClientOptions {
   breaker?: Breaker
   /** Bounds Retry-After. Default 30000. */
   maxRetryAfterMs?: number
+  /** What actually goes to the network. Defaults to global fetch.
+   *
+   *  It sits UNDER the retry loop, so a test that supplies one still
+   *  exercises the timeout, the retries, Retry-After and the breaker -
+   *  the fake replaces the network, not the resilience. Without this a
+   *  caller's only way to serve canned data is to patch globalThis. */
+  fetch?: typeof globalThis.fetch
 }
 
 /** What one request says about the service's health.
@@ -290,6 +297,7 @@ export function createResilientFetch({
   policy = singleRetry,
   breaker,
   maxRetryAfterMs = 30_000,
+  fetch: send = globalThis.fetch,
 }: Omit<ClientOptions, 'baseUrl'>) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init)
@@ -329,7 +337,7 @@ export function createResilientFetch({
           // The caller's own signal is combined with the per-attempt
           // timeout rather than replaced by it: a caller that aborts
           // must stop the whole call, not just lose one attempt.
-          res = await fetch(req.clone(), {
+          res = await send(req.clone(), {
             signal: caller
               ? AbortSignal.any([caller, AbortSignal.timeout(timeoutMs)])
               : AbortSignal.timeout(timeoutMs),

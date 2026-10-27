@@ -81,6 +81,37 @@ function within<T>(ms: number, what: string, p: Promise<T>): Promise<T> {
 const ok = () => new Response('{}', { status: 200 })
 const fail = (status: number) => () => new Response('', { status })
 
+// The point of the option is that a caller can serve canned data
+// WITHOUT patching globalThis, and still get the retries: the fake is
+// the network, not a replacement for the resilience.
+test('an injected fetch is used, and still retried', async () => {
+  const seen: string[] = []
+  const send = async (input: RequestInfo | URL) => {
+    seen.push(new Request(input).url)
+    return seen.length === 1 ? new Response('', { status: 503 }) : new Response('{}', { status: 200 })
+  }
+
+  const res = await createResilientFetch({
+    name: 'test',
+    fetch: send as typeof globalThis.fetch,
+    policy: { backoffs: () => [0], retry: singleRetry.retry },
+  })('https://x/thing')
+
+  assert.equal(res.status, 200)
+  assert.equal(seen.length, 2, 'the 503 was not retried through the injected fetch')
+  assert.ok(seen.every((u) => u === 'https://x/thing'))
+})
+
+// Nothing supplied means the global, so a caller that passes no fetch
+// is unaffected by the option existing.
+test('without one, the global fetch is used', async () => {
+  const s = stub([ok()])
+  await withFetch(s, async () => {
+    await createResilientFetch({ name: 'test' })('https://x/thing')
+  })
+  assert.equal(s.seen.length, 1)
+})
+
 test('the client identifies itself', async () => {
   const s = stub([ok()])
   await withFetch(s, async () => {
