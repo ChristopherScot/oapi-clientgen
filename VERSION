@@ -1,5 +1,6 @@
-v0.0.3
+v0.0.4
 
+v0.0.4 Retry-After is parsed strictly, and a Request keeps its signal
 v0.0.3 Generated files name the tool that generated them
 v0.0.2 Renamed to oapi-clientgen; go install reports its version
 v0.0.1 Initial release

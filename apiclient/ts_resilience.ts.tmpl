@@ -160,15 +160,30 @@ export function retryAfterMs(
   const v = res?.headers?.get('retry-after')
   if (!v) return { tooLong: false }
 
+  // Both forms matched on SHAPE, and anything else refused.
+  //
+  // Number() and Date.parse are each far looser than RFC 9110.
+  // Number('1.5') is a number but not an integer, so it fell through
+  // to Date.parse, which reads "1.5" as a date in 2001 and clamps the
+  // wait to zero - a server asking for a second and a half got
+  // hammered immediately. Date.parse is just as happy with '-5',
+  // '+5' and ' 5 .5'. Number() also takes '0x10' and '1e3'.
+  //
+  // So: digits only for delay-seconds, and an IMF-fixdate for the
+  // date form, which is the one spelling RFC 9110 allows. Anything
+  // else means we did not understand the header and fall back to the
+  // policy's own backoff, which is what the Go client does via
+  // strconv.Atoi and http.ParseTime.
   let ms
-  const secs = Number(v.trim())
-  if (Number.isInteger(secs)) {
-    if (secs < 0) return { tooLong: false }
-    ms = secs * 1000
-  } else {
-    const when = Date.parse(v)
+  const t = v.trim()
+  if (/^[0-9]+$/.test(t)) {
+    ms = Number(t) * 1000
+  } else if (/^[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$/.test(t)) {
+    const when = Date.parse(t)
     if (Number.isNaN(when)) return { tooLong: false }
     ms = Math.max(0, when - Date.now())
+  } else {
+    return { tooLong: false }
   }
   return ms > maxMs ? { tooLong: true } : { ms, tooLong: false }
 }
@@ -279,7 +294,15 @@ export function createResilientFetch({
     // Read off init rather than req.signal: Request always has one,
     // so req.signal cannot tell "the caller passed a signal" from
     // "the caller did not".
-    const caller = init?.signal ?? undefined
+    //
+    // Unless there is no init at all - fetch(request) with a Request
+    // that carries its own signal. Then init.signal cannot be the
+    // answer, and that is the shape the generated adapter uses, so
+    // the caller's cancellation was being dropped on the likeliest
+    // path: the backoff outlived them, the in-flight attempt was not
+    // cancelled, and classify() blamed the dependency for it.
+    const caller =
+      init?.signal ?? (input instanceof Request ? input.signal : undefined)
     req.headers.set(ClientVersionHeader, ClientVersion)
     if (name) req.headers.set(ClientNameHeader, name)
 
