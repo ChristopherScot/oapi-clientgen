@@ -229,9 +229,9 @@ test('a Retry-After that is not whole seconds falls back to the policy', () => {
   // hammered immediately.
   for (const v of ['1.5', '0.5', '0x10', '1e3', ' 5 .5', '5s', '']) {
     const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
-    if (got.ms !== undefined) {
-      assert.fail(`Retry-After: ${v} was read as ${got.ms}ms; it is not whole seconds`)
-    }
+    // The whole result: returning { tooLong: true } here would also
+    // leave ms undefined, and would wrongly stop the caller retrying.
+    assert.deepEqual(got, { tooLong: false }, `Retry-After: ${v} was not refused`)
   }
 })
 
@@ -240,22 +240,40 @@ test('the date forms RFC 9110 requires are all accepted', () => {
   // well or the two disagree on the same header from the same server.
   const when = new Date(Date.now() + 2000)
   const pad = (n: number) => String(n).padStart(2, '0')
-  const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][when.getUTCDay()]
-  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][when.getUTCMonth()]
+  const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const d = SHORT[when.getUTCDay()]
+  const dl = LONG[when.getUTCDay()]
+  const mon = MONTHS[when.getUTCMonth()]
+  const dd = pad(when.getUTCDate())
+  const yyyy = when.getUTCFullYear()
   const hms = `${pad(when.getUTCHours())}:${pad(when.getUTCMinutes())}:${pad(when.getUTCSeconds())}`
 
   for (const v of [
-    // IMF-fixdate, the one a modern server sends.
-    `${DAY}, ${pad(when.getUTCDate())} ${MON} ${when.getUTCFullYear()} ${hms} GMT`,
-    // Obsolete RFC 850. Date.parse reads it; a recipient must too.
-    `${DAY}day, ${pad(when.getUTCDate())}-${MON}-${String(when.getUTCFullYear()).slice(2)} ${hms} GMT`,
+    `${d}, ${dd} ${mon} ${yyyy} ${hms} GMT`,
+    `${dl}, ${dd}-${mon}-${String(yyyy).slice(2)} ${hms} GMT`,
   ]) {
     const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
     assert.ok(
       got.ms !== undefined && got.ms > 500 && got.ms <= 2000,
       `${v} gave ${got.ms}ms; a date two seconds out should be read as such`
     )
+  }
+})
+
+// Date.parse reads these; Go's http.ParseTime does not, so neither
+// may this. A bogus weekday is the one V8 ignores outright.
+test('a date-shaped header with a nonsense name is refused', () => {
+  for (const v of [
+    'Xyz, 21 Oct 2025 07:28:00 GMT',
+    'Funday, 06-Nov-26 08:49:37 GMT',
+    'Wed, 21 Zzz 2025 07:28:00 GMT',
+    'Wed, 21 Oct 2025 24:00:00 GMT',
+  ]) {
+    const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
+    assert.deepEqual(got, { tooLong: false }, `${v} was read as a date`)
   }
 })
 
@@ -300,6 +318,31 @@ test('a permanent protocol error is not retried', async () => {
     assert.equal(s.count, 1, `${status} was retried`)
     assert.equal(res.status, status)
   }
+})
+
+test('both signals count when the caller passes two', async () => {
+  // fetch(request, { signal }) with a Request that has one too.
+  // Choosing either one silently ignores the other, and nothing
+  // downstream recovers it - new Request(req, { signal }) does not
+  // merge them.
+  const onReq = new AbortController()
+  const s = stub([fail(503), ok()])
+  const req = new Request('https://x/thing', { signal: onReq.signal })
+  setTimeout(() => onReq.abort(), 20).unref?.()
+
+  const started = Date.now()
+  await assert.rejects(() =>
+    within(
+      1000,
+      'the backoff ignored the signal the Request carried',
+      withFetch(s, () =>
+        createResilientFetch({
+          policy: { backoffs: () => [30_000], retry: singleRetry.retry },
+        })(req, { signal: new AbortController().signal })
+      )
+    )
+  )
+  assert.ok(Date.now() - started < 1000, 'the backoff outlived the aborted caller')
 })
 
 test('a Request carrying its own signal is still the caller', async () => {

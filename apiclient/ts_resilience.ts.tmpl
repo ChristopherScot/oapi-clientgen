@@ -154,20 +154,27 @@ export const noRetry: RetryPolicy = { backoffs: () => [], retry: () => false }
  *  was retried in a second, which is the opposite of what it asked
  *  for at the moment it was most emphatic. */
 // The three date formats RFC 9110 requires a recipient to accept:
-// IMF-fixdate, obsolete RFC 850, and asctime. Matched on shape
-// because Date.parse takes far more than that - '-5', '+5' and
-// ' 5 .5' all read as dates in 2001 - and a header we did not
-// understand must fall back to the policy's backoff rather than
-// resolve to some arbitrary instant.
+// IMF-fixdate, obsolete RFC 850, and asctime. Go's http.ParseTime
+// takes exactly these three, so the two clients agree on what counts
+// as a date.
 //
-// Go's http.ParseTime accepts exactly these three, so the two
-// clients agree on what counts as a date.
+// Matched on shape, and with the real day and month names spelled
+// out, because Date.parse is far looser than the spec on both axes:
+// '-5', '+5' and ' 5 .5' all read as dates in 2001, and V8 ignores a
+// bogus weekday entirely - 'Xyz, 21 Oct 2025 07:28:00 GMT' parses
+// fine. Go rejects that, so a loose shape check would leave the two
+// disagreeing on the same header.
+const DAY = '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)'
+const DAYLONG = '(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)'
+const MON = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+const HMS = '(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
+
+const IMF_FIXDATE = new RegExp(`^${DAY}, [0-3][0-9] ${MON} [0-9]{4} ${HMS} GMT$`)
+const RFC850 = new RegExp(`^${DAYLONG}, [0-3][0-9]-${MON}-[0-9]{2} ${HMS} GMT$`)
+const ASCTIME = new RegExp(`^${DAY} ${MON} [ 0-3][0-9] ${HMS} [0-9]{4}$`)
+
 function isHTTPDate(t: string): boolean {
-  return (
-    /^[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$/.test(t) ||
-    /^[A-Za-z]+day, [0-9]{2}-[A-Za-z]{3}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$/.test(t) ||
-    /^[A-Za-z]{3} [A-Za-z]{3} [ 0-9][0-9] [0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}$/.test(t)
-  )
+  return IMF_FIXDATE.test(t) || RFC850.test(t) || ASCTIME.test(t)
 }
 
 export function retryAfterMs(
@@ -308,18 +315,20 @@ export function createResilientFetch({
 }: Omit<ClientOptions, 'baseUrl'> = {}) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init)
-    // Read off init rather than req.signal: Request always has one,
-    // so req.signal cannot tell "the caller passed a signal" from
-    // "the caller did not".
+    // Whichever signals the caller actually gave us, combined.
     //
-    // Unless there is no init at all - fetch(request) with a Request
-    // that carries its own signal. Then init.signal cannot be the
-    // answer, and that is the shape the generated adapter uses, so
-    // the caller's cancellation was being dropped on the likeliest
-    // path: the backoff outlived them, the in-flight attempt was not
-    // cancelled, and classify() blamed the dependency for it.
+    // Not req.signal: Request always synthesises one, so it cannot
+    // tell "the caller passed a signal" from "the caller did not".
+    // Not init.signal alone either - fetch(request) with no init is
+    // the shape the generated adapter uses, and that dropped the
+    // caller's cancellation on the likeliest path. Both can be
+    // present, and choosing one silently ignores the other.
+    const given = [
+      init?.signal,
+      input instanceof Request ? input.signal : undefined,
+    ].filter((s): s is AbortSignal => s != null)
     const caller =
-      init?.signal ?? (input instanceof Request ? input.signal : undefined)
+      given.length === 0 ? undefined : given.length === 1 ? given[0] : AbortSignal.any(given)
     req.headers.set(ClientVersionHeader, ClientVersion)
     if (name) req.headers.set(ClientNameHeader, name)
 
