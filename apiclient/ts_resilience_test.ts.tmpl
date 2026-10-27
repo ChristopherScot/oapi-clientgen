@@ -227,11 +227,35 @@ test('a Retry-After that is not whole seconds falls back to the policy', () => {
   // Date.parse, which read it as a date in 2001 and clamped the wait
   // to zero - the server asked for a second and a half and got
   // hammered immediately.
-  for (const v of ['1.5', '0.5', '0x10', '1e3', '+5', ' 5 .5']) {
+  for (const v of ['1.5', '0.5', '0x10', '1e3', ' 5 .5', '5s', '']) {
     const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
     if (got.ms !== undefined) {
       assert.fail(`Retry-After: ${v} was read as ${got.ms}ms; it is not whole seconds`)
     }
+  }
+})
+
+test('the date forms RFC 9110 requires are all accepted', () => {
+  // Go's http.ParseTime takes all three, so this client has to as
+  // well or the two disagree on the same header from the same server.
+  const when = new Date(Date.now() + 2000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][when.getUTCDay()]
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][when.getUTCMonth()]
+  const hms = `${pad(when.getUTCHours())}:${pad(when.getUTCMinutes())}:${pad(when.getUTCSeconds())}`
+
+  for (const v of [
+    // IMF-fixdate, the one a modern server sends.
+    `${DAY}, ${pad(when.getUTCDate())} ${MON} ${when.getUTCFullYear()} ${hms} GMT`,
+    // Obsolete RFC 850. Date.parse reads it; a recipient must too.
+    `${DAY}day, ${pad(when.getUTCDate())}-${MON}-${String(when.getUTCFullYear()).slice(2)} ${hms} GMT`,
+  ]) {
+    const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
+    assert.ok(
+      got.ms !== undefined && got.ms > 500 && got.ms <= 2000,
+      `${v} gave ${got.ms}ms; a date two seconds out should be read as such`
+    )
   }
 })
 
