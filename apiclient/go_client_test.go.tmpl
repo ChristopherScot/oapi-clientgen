@@ -21,7 +21,7 @@ func TestClientSendsVersionHeader(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err != nil {
+	if _, err := NewHTTPClient("test").Do(req); err != nil {
 		t.Fatal(err)
 	}
 	if got != ClientVersion {
@@ -37,10 +37,7 @@ func TestRetryIsBoundedAndBreakerOpens(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(HTTPOptions{
-		Policy:  NoRetry{},
-		Breaker: &Breaker{FailedRequests: 3, Cooldown: time.Minute},
-	})
+	c := NewHTTPClient("test", WithPolicy(NoRetry{}), WithBreaker(3, time.Minute))
 	var opened int
 	for i := 0; i < 5; i++ {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -66,7 +63,7 @@ func TestPostIsNeverRetried(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader("{}"))
-	NewHTTPClient(HTTPOptions{}).Do(req)
+	NewHTTPClient("test").Do(req)
 	if hits != 1 {
 		t.Errorf("POST made %d attempts, want 1", hits)
 	}
@@ -81,7 +78,7 @@ func TestIdempotentRequestIsRetriedOnce(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	NewHTTPClient(HTTPOptions{}).Do(req)
+	NewHTTPClient("test").Do(req)
 	if hits != 2 {
 		t.Errorf("GET made %d attempts, want 2 (initial + one retry)", hits)
 	}
@@ -103,7 +100,7 @@ func TestRetryAfterBeatsThePolicyBackoff(t *testing.T) {
 
 	start := time.Now()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	resp, err := NewHTTPClient("test").Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +181,7 @@ func TestTooLongRetryAfterStopsRatherThanRetryingSooner(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	resp, err := NewHTTPClient("test").Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +249,7 @@ func TestRetriedRequestResendsItsBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	resp, err := NewHTTPClient("test").Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +280,7 @@ func TestUnreplayableBodyIsNotRetried(t *testing.T) {
 	}
 	req.GetBody = nil // what a non-rewindable reader gives you
 
-	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	resp, err := NewHTTPClient("test").Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +310,7 @@ func TestBackoffStopsWhenTheCallerGivesUp(t *testing.T) {
 	}
 
 	start := time.Now()
-	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err == nil {
+	if _, err := NewHTTPClient("test").Do(req); err == nil {
 		t.Error("want the context error, got nil")
 	}
 
@@ -416,7 +413,7 @@ func TestExponentialRetryActuallyBacksOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := NewHTTPClient(HTTPOptions{Policy: ExponentialRetry{}}).Do(req)
+	resp, err := NewHTTPClient("test", WithPolicy(ExponentialRetry{})).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +447,7 @@ func TestTransportFailureIsRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if _, err := NewHTTPClient(HTTPOptions{}).Do(req); err == nil {
+	if _, err := NewHTTPClient("test").Do(req); err == nil {
 		t.Fatal("want a transport error, got nil")
 	}
 
@@ -475,7 +472,7 @@ func TestCancelledProbeDoesNotWedgeTheBreaker(t *testing.T) {
 	defer srv.Close()
 
 	b := &Breaker{FailedRequests: 1, Cooldown: 10 * time.Millisecond}
-	c := NewHTTPClient(HTTPOptions{Breaker: b})
+	c := NewHTTPClient("test", withBreaker(b))
 
 	// Trip it.
 	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -518,7 +515,7 @@ func TestCancellationIsNotADependencyFailure(t *testing.T) {
 	defer srv.Close()
 
 	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
-	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 
 	for i := 0; i < 3; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -549,7 +546,7 @@ func TestPermanentProtocolErrorsAreNotDependencyFailures(t *testing.T) {
 		}))
 
 		b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
-		c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+		c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 		for i := 0; i < 3; i++ {
 			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 			if err != nil {
@@ -576,7 +573,7 @@ func TestServerErrorsStillTripTheBreaker(t *testing.T) {
 	defer srv.Close()
 
 	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
-	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 	for i := 0; i < 2; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 		if err != nil {
@@ -606,11 +603,7 @@ func TestAHungDependencyStillTripsTheBreaker(t *testing.T) {
 	defer srv.Close()
 
 	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
-	c := NewHTTPClient(HTTPOptions{
-		Breaker: b,
-		Policy:  NoRetry{},
-		Timeout: 20 * time.Millisecond,
-	})
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}), WithTimeout(20*time.Millisecond))
 	for i := 0; i < 3; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 		if err != nil {
@@ -642,7 +635,7 @@ func TestAnIgnoredOutcomeDoesNotEraseRealFailures(t *testing.T) {
 	defer srv.Close()
 
 	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
-	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 	for i := 0; i < 20; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 		if err != nil {
@@ -673,7 +666,7 @@ func TestASuccessClearsTheFailureRun(t *testing.T) {
 	defer srv.Close()
 
 	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
-	c := NewHTTPClient(HTTPOptions{Breaker: b, Policy: NoRetry{}})
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 	for i := 0; i < 4; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 		if err != nil {
@@ -704,7 +697,7 @@ func TestPermanentProtocolErrorsAreNotRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	resp, err := NewHTTPClient("test").Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

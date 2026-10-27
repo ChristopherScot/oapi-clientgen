@@ -1,5 +1,6 @@
-v0.0.4
+v0.0.5
 
+v0.0.5 Optional client config is passed as options, and a name is required
 v0.0.4 Retry-After is parsed by shape in both languages, and a Request keeps its signal
 v0.0.3 Generated files name the tool that generated them
 v0.0.2 Renamed to oapi-clientgen; go install reports its version
