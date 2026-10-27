@@ -178,14 +178,14 @@ func TestGoConstructorMatchesOgensSignature(t *testing.T) {
 	}{
 		{
 			name:     "no securitySchemes",
-			wantSig:  "func New(serverURL string, o HTTPOptions) (*Client, error)",
-			wantCall: "return NewClient(serverURL, WithClient(NewHTTPClient(o)))",
+			wantSig:  "func New(serverURL, name string, opts ...TransportOption) (*Client, error)",
+			wantCall: "return NewClient(serverURL, WithClient(NewHTTPClient(name, opts...)))",
 		},
 		{
 			name:        "with securitySchemes",
 			hasSecurity: true,
-			wantSig:     "func New(serverURL string, o HTTPOptions, sec SecuritySource) (*Client, error)",
-			wantCall:    "return NewClient(serverURL, sec, WithClient(NewHTTPClient(o)))",
+			wantSig:     "func New(serverURL, name string, sec SecuritySource, opts ...TransportOption) (*Client, error)",
+			wantCall:    "return NewClient(serverURL, sec, WithClient(NewHTTPClient(name, opts...)))",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

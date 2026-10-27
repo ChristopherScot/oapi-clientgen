@@ -90,18 +90,10 @@ test('the client identifies itself', async () => {
   assert.equal(s.seen[0].headers.get(ClientNameHeader), 'caller')
 })
 
-test('Client-Name is omitted when the caller did not name itself', async () => {
-  const s = stub([ok()])
-  await withFetch(s, async () => {
-    await createResilientFetch()('https://x/thing')
-  })
-  assert.equal(s.seen[0].headers.get(ClientNameHeader), null)
-})
-
 test('an idempotent request is retried once by default', async () => {
   const s = stub([fail(503), ok()])
   const res = await withFetch(s, () =>
-    createResilientFetch({ policy: { backoffs: () => [0], retry: singleRetry.retry } })(
+    createResilientFetch({ name: 'test', policy: { backoffs: () => [0], retry: singleRetry.retry } })(
       'https://x/thing'
     )
   )
@@ -112,7 +104,7 @@ test('an idempotent request is retried once by default', async () => {
 test('a POST is never retried', async () => {
   const s = stub([fail(503), ok()])
   const res = await withFetch(s, () =>
-    createResilientFetch({ policy: { backoffs: () => [0], retry: singleRetry.retry } })(
+    createResilientFetch({ name: 'test', policy: { backoffs: () => [0], retry: singleRetry.retry } })(
       'https://x/thing',
       { method: 'POST', body: 'x' }
     )
@@ -130,7 +122,7 @@ test('a retried request resends its body', async () => {
   // stub: clone() is what makes the replay work, and reading there
   // would consume the stream the client is about to send.
   await withFetch(s, () =>
-    createResilientFetch({ policy: { backoffs: () => [0], retry: singleRetry.retry } })(
+    createResilientFetch({ name: 'test', policy: { backoffs: () => [0], retry: singleRetry.retry } })(
       'https://x/thing',
       { method: 'PUT', body: 'payload' }
     )
@@ -146,7 +138,7 @@ test('a retried request resends its body', async () => {
 test('a transport failure is retried', async () => {
   const s = stub([new TypeError('connection refused'), ok()])
   const res = await withFetch(s, () =>
-    createResilientFetch({ policy: { backoffs: () => [0], retry: singleRetry.retry } })(
+    createResilientFetch({ name: 'test', policy: { backoffs: () => [0], retry: singleRetry.retry } })(
       'https://x/thing'
     )
   )
@@ -157,7 +149,7 @@ test('a transport failure is retried', async () => {
 test('noRetry makes exactly one attempt', async () => {
   const s = stub([fail(503)])
   const res = await withFetch(s, () =>
-    createResilientFetch({ policy: noRetry })('https://x/thing')
+    createResilientFetch({ name: 'test', policy: noRetry })('https://x/thing')
   )
   assert.equal(res.status, 503)
   assert.equal(s.count, 1)
@@ -188,6 +180,7 @@ test('Retry-After beats the policy backoff', async () => {
     'the client waited its own backoff instead of the 0s the server asked for',
     withFetch(s, () =>
       createResilientFetch({
+        name: 'test',
         policy: { backoffs: () => [10_000], retry: singleRetry.retry },
       })('https://x/thing')
     )
@@ -295,6 +288,7 @@ test('a too-long Retry-After stops rather than retrying sooner', async () => {
     'the client honoured a 3600s Retry-After instead of giving up',
     withFetch(s, () =>
       createResilientFetch({
+        name: 'test',
         policy: { backoffs: () => [0], retry: singleRetry.retry },
         maxRetryAfterMs: 30_000,
       })('https://x/thing')
@@ -311,7 +305,7 @@ test('a permanent protocol error is not retried', async () => {
   for (const status of [501, 505]) {
     const s = stub([fail(status), ok()])
     const res = await withFetch(s, () =>
-      createResilientFetch({ policy: { backoffs: () => [0], retry: singleRetry.retry } })(
+      createResilientFetch({ name: 'test', policy: { backoffs: () => [0], retry: singleRetry.retry } })(
         'https://x/thing'
       )
     )
@@ -337,6 +331,7 @@ test('both signals count when the caller passes two', async () => {
       'the backoff ignored the signal the Request carried',
       withFetch(s, () =>
         createResilientFetch({
+          name: 'test',
           policy: { backoffs: () => [30_000], retry: singleRetry.retry },
         })(req, { signal: new AbortController().signal })
       )
@@ -366,6 +361,7 @@ test('a Request carrying its own signal is still the caller', async () => {
         'the backoff outlived a caller that aborted mid-wait',
         withFetch(s, () =>
           createResilientFetch({
+            name: 'test',
             policy: { backoffs: () => [30_000], retry: singleRetry.retry },
           })(req)
         )
@@ -389,6 +385,7 @@ test('the caller giving up cuts the backoff short', async () => {
       'the backoff outlived the caller that had already given up',
       withFetch(s, () =>
         createResilientFetch({
+          name: 'test',
           policy: { backoffs: () => [30_000], retry: singleRetry.retry },
         })('https://x/thing', { signal: caller })
       )
@@ -418,7 +415,7 @@ test('an open circuit rejects without reaching the dependency', async () => {
 
   const s = stub([ok()])
   await assert.rejects(
-    () => withFetch(s, () => createResilientFetch({ breaker: b })('https://x/thing')),
+    () => withFetch(s, () => createResilientFetch({ name: 'test', breaker: b })('https://x/thing')),
     CircuitOpenError
   )
   assert.equal(s.count, 0, 'the request reached a dependency behind an open circuit')
@@ -518,7 +515,7 @@ test('a cancelled request does not wedge the breaker', async () => {
   const s = stub([new DOMException('aborted', 'AbortError')])
   await assert.rejects(() =>
     withFetch(s, () =>
-      createResilientFetch({ breaker: b, policy: noRetry })('https://x/thing', {
+      createResilientFetch({ name: 'test', breaker: b, policy: noRetry })('https://x/thing', {
         signal: AbortSignal.abort(),
       })
     )
@@ -532,7 +529,7 @@ test('cancellation is not a dependency failure', async () => {
   const s = stub([new DOMException('aborted', 'AbortError')])
   await assert.rejects(() =>
     withFetch(s, () =>
-      createResilientFetch({ breaker: b, policy: noRetry })('https://x/thing', {
+      createResilientFetch({ name: 'test', breaker: b, policy: noRetry })('https://x/thing', {
         signal: AbortSignal.abort(),
       })
     )
@@ -554,7 +551,7 @@ test('a hung dependency trips the breaker', async () => {
   }
   await assert.rejects(() =>
     withFetch(s, () =>
-      createResilientFetch({ breaker: b, policy: noRetry, timeoutMs: 20 })('https://x/thing')
+      createResilientFetch({ name: 'test', breaker: b, policy: noRetry, timeoutMs: 20 })('https://x/thing')
     )
   )
   assert.equal(b.allow(), false, 'a dependency that never answers did not trip the breaker')
@@ -575,7 +572,7 @@ test('a permanent protocol error is not a dependency failure', async () => {
     const b = new Breaker(1, 30_000)
     const s = stub([fail(status)])
     await withFetch(s, () =>
-      createResilientFetch({ breaker: b, policy: noRetry })('https://x/thing')
+      createResilientFetch({ name: 'test', breaker: b, policy: noRetry })('https://x/thing')
     )
     assert.equal(b.allow(), true, `${status} counted against the service`)
   }
@@ -599,7 +596,7 @@ test('omitting the breaker disables breaking', async () => {
   const s = stub([fail(503)])
   for (let i = 0; i < 10; i++) {
     const res = await withFetch(s, () =>
-      createResilientFetch({ policy: noRetry })('https://x/thing')
+      createResilientFetch({ name: 'test', policy: noRetry })('https://x/thing')
     )
     assert.equal(res.status, 503)
   }

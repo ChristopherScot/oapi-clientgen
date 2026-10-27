@@ -45,9 +45,10 @@ export interface RetryPolicy {
 
 export interface ClientOptions {
   baseUrl: string
-  /** The CALLER's own service name, sent as Client-Name so a runaway
-   *  client can be attributed. */
-  name?: string
+  /** The CALLER's own service name, sent as Client-Name. Required
+   *  because the cost of omitting it falls on whoever operates the
+   *  service being called. */
+  name: string
   /** Bounds a single attempt. Default 5000; a retry gets its own. */
   timeoutMs?: number
   /** Default singleRetry. */
@@ -292,7 +293,7 @@ export function createResilientFetch({
   policy = singleRetry,
   breaker,
   maxRetryAfterMs = 30_000,
-}: Omit<ClientOptions, 'baseUrl'> = {}) {
+}: Omit<ClientOptions, 'baseUrl'>) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init)
     // Whichever signals the caller actually gave us, combined.
