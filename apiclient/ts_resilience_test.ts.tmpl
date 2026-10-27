@@ -93,7 +93,7 @@ test('an injected fetch is used, and still retried', async () => {
 
   const res = await createResilientFetch({
     name: 'test',
-    fetch: send as typeof globalThis.fetch,
+    fetch: send,
     policy: { backoffs: () => [0], retry: singleRetry.retry },
   })('https://x/thing')
 
