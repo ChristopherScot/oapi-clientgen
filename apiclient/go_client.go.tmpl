@@ -178,9 +178,7 @@ type Breaker struct {
 	// circuit. A request that exhausted its retries counts once.
 	//
 	// Zero lets everything through. Use WithBreaker, which sets it
-	// explicitly. The TypeScript client's new Breaker() opens after 5
-	// instead, because a constructor can carry a default and a zero
-	// value cannot: do not "fix" either to match.
+	// explicitly.
 	FailedRequests int
 	Cooldown       time.Duration
 
@@ -284,7 +282,8 @@ func WithPolicy(p RetryPolicy) TransportOption {
 
 // WithBreaker turns on circuit breaking, which is otherwise off.
 // failedRequests counts whole REQUESTS: one that exhausted its
-// retries counts once.
+// retries counts once. 5 and 30s are the usual pair, and what the
+// TypeScript client's new Breaker() uses when given nothing.
 func WithBreaker(failedRequests int, cooldown time.Duration) TransportOption {
 	return func(c *HTTPClient) {
 		c.breaker = &Breaker{FailedRequests: failedRequests, Cooldown: cooldown}
