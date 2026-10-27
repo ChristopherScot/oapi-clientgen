@@ -129,6 +129,20 @@ func TestRetryAfterIsCapped(t *testing.T) {
 	}
 }
 
+// A negative delay is not a wait. "-0" is the one that needs saying:
+// Atoi reads it as 0 with no error, so a numeric test for the sign
+// accepts it while the TypeScript client's digits-only shape does
+// not.
+func TestANegativeRetryAfterFallsBackToThePolicy(t *testing.T) {
+	for _, v := range []string{"-5", "-0", "-1"} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{v}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		if ok || tooLong {
+			t.Errorf("retryAfter(%q) = %v, ok=%v, tooLong=%v; want a fall back to the policy", v, wait, ok, tooLong)
+		}
+	}
+}
+
 // A Retry-After far past the cap must still read as too long. The
 // first three wrap time.Duration's int64 nanoseconds - to -1s,
 // -808ms and -2562047h - which would otherwise read as under any

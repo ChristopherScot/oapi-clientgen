@@ -372,7 +372,9 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 		return 0, false, true
 	}
 	if err == nil {
-		if secs < 0 {
+		// Not secs < 0: Atoi reads "-0" as 0, so the sign has to be
+		// caught in the text. RFC 9110 has no negative delay-seconds.
+		if strings.HasPrefix(t, "-") {
 			return 0, false, false
 		}
 		// Duration is int64 nanoseconds: 9223372036854775 seconds
