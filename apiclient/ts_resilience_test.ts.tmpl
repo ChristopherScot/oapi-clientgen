@@ -46,8 +46,8 @@ function stub(
 }
 
 // Installs a stub as globalThis.fetch for one test and restores it.
-// createResilientFetch closes over the global, which is the seam a
-// consumer gets too.
+// createResilientFetch reads the global per request, which is the
+// seam a consumer gets too.
 function withFetch<T>(s: { fetch: any }, fn: () => Promise<T>): Promise<T> {
   const real = globalThis.fetch
   globalThis.fetch = s.fetch
@@ -80,6 +80,38 @@ function within<T>(ms: number, what: string, p: Promise<T>): Promise<T> {
 
 const ok = () => new Response('{}', { status: 200 })
 const fail = (status: number) => () => new Response('', { status })
+
+// The point of the option is that a caller can serve canned data
+// WITHOUT patching globalThis, and still get the retries: the fake is
+// the network, not a replacement for the resilience.
+test('an injected fetch is used, and still retried', async () => {
+  const seen: string[] = []
+  const send = async (input: RequestInfo | URL) => {
+    seen.push(new Request(input).url)
+    return seen.length === 1 ? new Response('', { status: 503 }) : new Response('{}', { status: 200 })
+  }
+
+  const res = await createResilientFetch({
+    name: 'test',
+    fetch: send,
+    policy: { backoffs: () => [0], retry: singleRetry.retry },
+  })('https://x/thing')
+
+  assert.equal(res.status, 200)
+  assert.equal(seen.length, 2, 'the 503 was not retried through the injected fetch')
+  assert.ok(seen.every((u) => u === 'https://x/thing'))
+})
+
+// Built BEFORE the global is swapped, which is the shape that matters:
+// a consumer constructs its client at module load and an interceptor
+// arrives later. Capturing globalThis.fetch when the factory runs
+// would send this to the real network.
+test('without one, the global fetch is read per request', async () => {
+  const s = stub([ok()])
+  const send = createResilientFetch({ name: 'test' })
+  await withFetch(s, () => send('https://x/thing'))
+  assert.equal(s.seen.length, 1)
+})
 
 test('the client identifies itself', async () => {
   const s = stub([ok()])
