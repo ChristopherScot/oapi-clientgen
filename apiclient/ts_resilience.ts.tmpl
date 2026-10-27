@@ -171,7 +171,7 @@ const HMS = '(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
 
 const IMF_FIXDATE = new RegExp(`^${DAY}, [0-3][0-9] ${MON} [0-9]{4} ${HMS} GMT$`)
 const RFC850 = new RegExp(`^${DAYLONG}, [0-3][0-9]-${MON}-[0-9]{2} ${HMS} GMT$`)
-const ASCTIME = new RegExp(`^${DAY} ${MON} [ 0-3][0-9] ${HMS} [0-9]{4}$`)
+const ASCTIME = new RegExp(`^${DAY} ${MON} [ 0-3]?[0-9] ${HMS} [0-9]{4}$`)
 
 function isHTTPDate(t: string): boolean {
   return IMF_FIXDATE.test(t) || RFC850.test(t) || ASCTIME.test(t)
@@ -193,11 +193,11 @@ export function retryAfterMs(
   // hammered immediately. Date.parse is just as happy with '-5',
   // '+5' and ' 5 .5'. Number() also takes '0x10' and '1e3'.
   //
-  // So: digits only for delay-seconds, and an IMF-fixdate for the
-  // date form, which is the one spelling RFC 9110 allows. Anything
-  // else means we did not understand the header and fall back to the
-  // policy's own backoff, which is what the Go client does via
-  // strconv.Atoi and http.ParseTime.
+  // So: digits only for delay-seconds, and one of the three date
+  // spellings RFC 9110 requires a recipient to accept (see
+  // isHTTPDate). Anything else means we did not understand the header
+  // and fall back to the policy's own backoff, which is what the Go
+  // client does via strconv.Atoi and http.ParseTime.
   let ms
   const t = v.trim()
   if (/^\+?[0-9]+$/.test(t)) {
@@ -209,6 +209,16 @@ export function retryAfterMs(
   } else {
     return { tooLong: false }
   }
+  // Over the cap means STOP, not "wait maxMs instead". Stopping rather
+  // than clamping is a deliberate choice, and not what the wider
+  // ecosystem does: urllib3 sleeps for its retry_after_max instead (6
+  // hours by default). At our 30s default that would be wrong. A
+  // server asking for longer than 30s is saying "not now", and
+  // anything that must be retried minutes or hours later has to
+  // survive a deploy or an eviction, so it belongs in a queue or a
+  // scheduled job - not parked inside one request. Fail fast; the
+  // Response still carries Retry-After for whoever schedules it, and
+  // this parser is exported so they need not write it again.
   return ms > maxMs ? { tooLong: true } : { ms, tooLong: false }
 }
 

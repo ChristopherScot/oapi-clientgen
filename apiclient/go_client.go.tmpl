@@ -336,10 +336,8 @@ func New(serverURL string, o HTTPOptions{{ if .HasSecurity }}, sec SecuritySourc
 
 // retryAfter reads the server's own answer. RFC 9110 allows either a
 // delay in seconds or an HTTP-date, and servers send both in the wild.
-// Capped so an hour-long value cannot masquerade as a hang.
-// retryAfter reads the server's own answer. The third result says
-// the server asked for longer than max: the caller must give up
-// rather than substitute a shorter wait of its own.
+// The third result says the server asked for longer than max: the
+// caller must give up rather than substitute a shorter wait of its own.
 func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok bool, tooLong bool) {
 	if resp == nil {
 		return 0, false, false
@@ -354,8 +352,16 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 		if secs < 0 {
 			return 0, false, false
 		}
+		// Bound before multiplying. time.Duration is an int64 of
+		// nanoseconds, so any value past this wraps: 9223372036854775
+		// seconds becomes -808ms, which then reads as shorter than max
+		// and retries instantly - the precise inversion this function
+		// exists to prevent. Compare in seconds, where nothing wraps.
+		if int64(secs) > int64(max/time.Second) {
+			return 0, false, true
+		}
 		d = time.Duration(secs) * time.Second
-	} else if t, err := http.ParseTime(v); err == nil {
+	} else if t, err := http.ParseTime(strings.TrimSpace(v)); err == nil {
 		d = time.Until(t)
 		if d < 0 {
 			d = 0
@@ -370,6 +376,16 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 	// retried in a second - the opposite of what it asked for, at the
 	// moment it was most emphatic. maxRetryAfter is a bound on our
 	// patience, not a filter on the server's answer.
+	//
+	// Stopping rather than clamping to max is a deliberate choice, and
+	// not what the wider ecosystem does: urllib3 sleeps for its
+	// retry_after_max instead (6 hours by default). At our 30s default
+	// that would be wrong. A server asking for longer than 30s is
+	// saying "not now", and anything that must be retried minutes or
+	// hours later has to survive a deploy or an eviction, so it
+	// belongs in a queue or a scheduled job - not parked on a
+	// connection and a goroutine inside one request. Fail fast; the
+	// response still carries Retry-After for whoever schedules it.
 	if d > max {
 		return 0, false, true
 	}

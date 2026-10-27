@@ -129,6 +129,25 @@ func TestRetryAfterIsCapped(t *testing.T) {
 	}
 }
 
+// A Retry-After far past the cap must still read as too long. These
+// are the values where time.Duration's int64 of nanoseconds wraps:
+// 9223372036854775 seconds multiplies out to -808ms and the largest
+// int64 to -1s. A negative wait is under any cap, so the overflowed
+// value read as a SHORTER wait than asked for and fired the retry
+// immediately - a server asking for geological time got hammered.
+func TestAnAbsurdRetryAfterDoesNotWrapIntoAnImmediateRetry(t *testing.T) {
+	for _, v := range []string{"9223372036854775807", "9223372036854775", "9223372037"} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{v}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		if ok {
+			t.Errorf("Retry-After: %s was accepted as a %v wait", v, wait)
+		}
+		if !tooLong {
+			t.Errorf("Retry-After: %s must report tooLong; the caller otherwise retries on its own backoff", v)
+		}
+	}
+}
+
 // What the cap means. Over the limit is "stop", not "ignore the
 // header": falling back to the policy's backoff retried a server
 // that asked for an hour after one second, which is the opposite of
