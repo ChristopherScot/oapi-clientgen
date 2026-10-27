@@ -334,6 +334,21 @@ func New(serverURL string, o HTTPOptions{{ if .HasSecurity }}, sec SecuritySourc
 	return NewClient(serverURL, {{ if .HasSecurity }}sec, {{ end }}WithClient(NewHTTPClient(o)))
 }
 
+// isDigits reports whether every byte is an ASCII digit, with an
+// optional leading +, matching what Atoi accepts in range.
+func isDigits(s string) bool {
+	s = strings.TrimPrefix(s, "+")
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // retryAfter reads the server's own answer. RFC 9110 allows either a
 // delay in seconds or an HTTP-date, and servers send both in the wild.
 // The third result says the server asked for longer than max: the
@@ -348,7 +363,15 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 	}
 
 	var d time.Duration
-	if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+	t := strings.TrimSpace(v)
+	secs, err := strconv.Atoi(t)
+	// A digit string too big for int64 is longer than any cap, not
+	// unreadable. Atoi reports ErrRange for it, which is not the same
+	// answer as "this is not a number".
+	if errors.Is(err, strconv.ErrRange) && isDigits(t) {
+		return 0, false, true
+	}
+	if err == nil {
 		if secs < 0 {
 			return 0, false, false
 		}
@@ -358,9 +381,9 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 			return 0, false, true
 		}
 		d = time.Duration(secs) * time.Second
-	} else if t, err := http.ParseTime(strings.TrimSpace(v)); err == nil {
+	} else if when, err := http.ParseTime(t); err == nil {
 		// time.Until saturates rather than wrapping, so no bound here.
-		d = time.Until(t)
+		d = time.Until(when)
 		if d < 0 {
 			d = 0
 		}
