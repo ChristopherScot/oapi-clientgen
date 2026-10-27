@@ -334,12 +334,25 @@ func New(serverURL string, o HTTPOptions{{ if .HasSecurity }}, sec SecuritySourc
 	return NewClient(serverURL, {{ if .HasSecurity }}sec, {{ end }}WithClient(NewHTTPClient(o)))
 }
 
+// isDigits reports whether every byte is an ASCII digit, with an
+// optional leading +, matching what Atoi accepts in range.
+func isDigits(s string) bool {
+	s = strings.TrimPrefix(s, "+")
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // retryAfter reads the server's own answer. RFC 9110 allows either a
 // delay in seconds or an HTTP-date, and servers send both in the wild.
-// Capped so an hour-long value cannot masquerade as a hang.
-// retryAfter reads the server's own answer. The third result says
-// the server asked for longer than max: the caller must give up
-// rather than substitute a shorter wait of its own.
+// The third result says the server asked for longer than max: the
+// caller must give up rather than substitute a shorter wait of its own.
 func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok bool, tooLong bool) {
 	if resp == nil {
 		return 0, false, false
@@ -350,13 +363,29 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 	}
 
 	var d time.Duration
-	if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-		if secs < 0 {
+	t := strings.TrimSpace(v)
+	secs, err := strconv.Atoi(t)
+	// A digit string too big for int64 is longer than any cap, not
+	// unreadable. Atoi reports ErrRange for it, which is not the same
+	// answer as "this is not a number".
+	if errors.Is(err, strconv.ErrRange) && isDigits(t) {
+		return 0, false, true
+	}
+	if err == nil {
+		// Not secs < 0: Atoi reads "-0" as 0, so the sign has to be
+		// caught in the text. RFC 9110 has no negative delay-seconds.
+		if strings.HasPrefix(t, "-") {
 			return 0, false, false
 		}
+		// Duration is int64 nanoseconds: 9223372036854775 seconds
+		// multiplies out to -808ms, which reads as under max.
+		if int64(secs) > int64(max/time.Second) {
+			return 0, false, true
+		}
 		d = time.Duration(secs) * time.Second
-	} else if t, err := http.ParseTime(v); err == nil {
-		d = time.Until(t)
+	} else if when, err := http.ParseTime(t); err == nil {
+		// time.Until saturates rather than wrapping, so no bound here.
+		d = time.Until(when)
 		if d < 0 {
 			d = 0
 		}
@@ -364,12 +393,11 @@ func retryAfter(resp *http.Response, max time.Duration) (wait time.Duration, ok 
 		return 0, false, false
 	}
 
-	// Longer than we are willing to wait means STOP, not "ignore the
-	// header". Returning false here sent the caller back to the
-	// policy's own backoff, so a server asking for an hour was
-	// retried in a second - the opposite of what it asked for, at the
-	// moment it was most emphatic. maxRetryAfter is a bound on our
-	// patience, not a filter on the server's answer.
+	// max bounds our patience, not the server's answer. Stop rather
+	// than clamp to it, which is what urllib3 does: past our patience
+	// the work belongs in a queue that survives a deploy, not parked
+	// on a connection. The response still carries Retry-After for
+	// whoever schedules it.
 	if d > max {
 		return 0, false, true
 	}

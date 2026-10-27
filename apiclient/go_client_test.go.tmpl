@@ -129,6 +129,43 @@ func TestRetryAfterIsCapped(t *testing.T) {
 	}
 }
 
+// A negative delay is not a wait. "-0" is the one that needs saying:
+// Atoi reads it as 0 with no error, so a numeric test for the sign
+// accepts it while the TypeScript client's digits-only shape does
+// not.
+func TestANegativeRetryAfterFallsBackToThePolicy(t *testing.T) {
+	for _, v := range []string{"-5", "-0", "-1"} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{v}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		if ok || tooLong {
+			t.Errorf("retryAfter(%q) = %v, ok=%v, tooLong=%v; want a fall back to the policy", v, wait, ok, tooLong)
+		}
+	}
+}
+
+// A Retry-After far past the cap must still read as too long. The
+// first three wrap time.Duration's int64 nanoseconds - to -1s,
+// -808ms and -2562047h - which would otherwise read as under any
+// cap; the rest exceed int64 and so never reach the multiply.
+func TestAnAbsurdRetryAfterDoesNotWrapIntoAnImmediateRetry(t *testing.T) {
+	for _, v := range []string{
+		"9223372036854775807", "9223372036854775", "9223372037",
+		// Past int64 entirely: Atoi reports ErrRange, not a parse
+		// failure, so these must not fall through to the policy.
+		"9223372036854775808", "+9223372036854775808",
+		"18446744073709551616", "99999999999999999999999999",
+	} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{v}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		if ok {
+			t.Errorf("retryAfter(%q) = %v, true; want ok=false", v, wait)
+		}
+		if !tooLong {
+			t.Errorf("retryAfter(%q) tooLong=false; the caller then retries on its own backoff", v)
+		}
+	}
+}
+
 // What the cap means. Over the limit is "stop", not "ignore the
 // header": falling back to the policy's backoff retried a server
 // that asked for an hour after one second, which is the opposite of

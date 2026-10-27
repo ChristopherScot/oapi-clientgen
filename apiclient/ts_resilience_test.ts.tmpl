@@ -221,6 +221,62 @@ test('an unparseable Retry-After falls back to the policy', () => {
   )
 })
 
+test('a Retry-After that is not whole seconds falls back to the policy', () => {
+  // Number() accepts all of these; RFC 9110 does not. '1.5' is the
+  // one that bit: it is not an integer, so it fell through to
+  // Date.parse, which read it as a date in 2001 and clamped the wait
+  // to zero - the server asked for a second and a half and got
+  // hammered immediately.
+  for (const v of ['1.5', '0.5', '0x10', '1e3', ' 5 .5', '5s', '']) {
+    const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
+    // The whole result: returning { tooLong: true } here would also
+    // leave ms undefined, and would wrongly stop the caller retrying.
+    assert.deepEqual(got, { tooLong: false }, `Retry-After: ${v} was not refused`)
+  }
+})
+
+test('the date forms RFC 9110 requires are all accepted', () => {
+  // Go's http.ParseTime takes all three, so this client has to as
+  // well or the two disagree on the same header from the same server.
+  const when = new Date(Date.now() + 2000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const d = SHORT[when.getUTCDay()]
+  const dl = LONG[when.getUTCDay()]
+  const mon = MONTHS[when.getUTCMonth()]
+  const dd = pad(when.getUTCDate())
+  const yyyy = when.getUTCFullYear()
+  const hms = `${pad(when.getUTCHours())}:${pad(when.getUTCMinutes())}:${pad(when.getUTCSeconds())}`
+
+  for (const v of [
+    `${d}, ${dd} ${mon} ${yyyy} ${hms} GMT`,
+    `${dl}, ${dd}-${mon}-${String(yyyy).slice(2)} ${hms} GMT`,
+  ]) {
+    const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
+    assert.ok(
+      got.ms !== undefined && got.ms > 500 && got.ms <= 2000,
+      `${v} gave ${got.ms}ms; a date two seconds out should be read as such`
+    )
+  }
+})
+
+// Date.parse reads these; Go's http.ParseTime does not, so neither
+// may this. A bogus weekday is the one V8 ignores outright.
+test('a date-shaped header with a nonsense name is refused', () => {
+  for (const v of [
+    'Xyz, 21 Oct 2025 07:28:00 GMT',
+    'Funday, 06-Nov-26 08:49:37 GMT',
+    'Wed, 21 Zzz 2025 07:28:00 GMT',
+    'Wed, 21 Oct 2025 24:00:00 GMT',
+  ]) {
+    const got = retryAfterMs(new Response('', { headers: { 'retry-after': v } }), 30_000)
+    assert.deepEqual(got, { tooLong: false }, `${v} was read as a date`)
+  }
+})
+
 test('a negative Retry-After falls back to the policy', () => {
   assert.deepEqual(
     retryAfterMs(new Response('', { headers: { 'retry-after': '-5' } }), 30_000),
@@ -262,6 +318,65 @@ test('a permanent protocol error is not retried', async () => {
     assert.equal(s.count, 1, `${status} was retried`)
     assert.equal(res.status, status)
   }
+})
+
+test('both signals count when the caller passes two', async () => {
+  // fetch(request, { signal }) with a Request that has one too.
+  // Choosing either one silently ignores the other, and nothing
+  // downstream recovers it - new Request(req, { signal }) does not
+  // merge them.
+  const onReq = new AbortController()
+  const s = stub([fail(503), ok()])
+  const req = new Request('https://x/thing', { signal: onReq.signal })
+  setTimeout(() => onReq.abort(), 20).unref?.()
+
+  const started = Date.now()
+  await assert.rejects(() =>
+    within(
+      1000,
+      'the backoff ignored the signal the Request carried',
+      withFetch(s, () =>
+        createResilientFetch({
+          policy: { backoffs: () => [30_000], retry: singleRetry.retry },
+        })(req, { signal: new AbortController().signal })
+      )
+    )
+  )
+  assert.ok(Date.now() - started < 1000, 'the backoff outlived the aborted caller')
+})
+
+test('a Request carrying its own signal is still the caller', async () => {
+  // fetch(request) with no init, which is the shape the generated
+  // adapter uses: init.signal cannot answer here, so the caller's
+  // signal was dropped and the backoff outlived them.
+  //
+  // The caller aborts DURING the backoff, not before the call - an
+  // already-aborted signal fails the first attempt and never reaches
+  // the wait, which is where the dropped signal actually shows.
+  const ac = new AbortController()
+  const s = stub([fail(503), ok()])
+  const req = new Request('https://x/thing', { signal: ac.signal })
+  setTimeout(() => ac.abort(), 20).unref?.()
+
+  const started = Date.now()
+  await assert.rejects(
+    () =>
+      within(
+        1000,
+        'the backoff outlived a caller that aborted mid-wait',
+        withFetch(s, () =>
+          createResilientFetch({
+            policy: { backoffs: () => [30_000], retry: singleRetry.retry },
+          })(req)
+        )
+      ),
+    'the caller aborted and the call should have failed'
+  )
+  assert.ok(
+    Date.now() - started < 1000,
+    'the backoff ran on behalf of a caller that had already gone'
+  )
+  assert.equal(s.count, 1, 'a retry was sent for a caller that had aborted')
 })
 
 test('the caller giving up cuts the backoff short', async () => {
