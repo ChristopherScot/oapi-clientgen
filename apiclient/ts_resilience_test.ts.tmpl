@@ -46,8 +46,8 @@ function stub(
 }
 
 // Installs a stub as globalThis.fetch for one test and restores it.
-// createResilientFetch closes over the global, which is the seam a
-// consumer gets too.
+// createResilientFetch reads the global per request, which is the
+// seam a consumer gets too.
 function withFetch<T>(s: { fetch: any }, fn: () => Promise<T>): Promise<T> {
   const real = globalThis.fetch
   globalThis.fetch = s.fetch
@@ -102,13 +102,14 @@ test('an injected fetch is used, and still retried', async () => {
   assert.ok(seen.every((u) => u === 'https://x/thing'))
 })
 
-// Nothing supplied means the global, so a caller that passes no fetch
-// is unaffected by the option existing.
-test('without one, the global fetch is used', async () => {
+// Built BEFORE the global is swapped, which is the shape that matters:
+// a consumer constructs its client at module load and an interceptor
+// arrives later. Capturing globalThis.fetch when the factory runs
+// would send this to the real network.
+test('without one, the global fetch is read per request', async () => {
   const s = stub([ok()])
-  await withFetch(s, async () => {
-    await createResilientFetch({ name: 'test' })('https://x/thing')
-  })
+  const send = createResilientFetch({ name: 'test' })
+  await withFetch(s, () => send('https://x/thing'))
   assert.equal(s.seen.length, 1)
 })
 
