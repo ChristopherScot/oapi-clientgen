@@ -211,6 +211,33 @@ func TestRetryAfterAcceptsAnHTTPDate(t *testing.T) {
 	}
 }
 
+// A leading plus is a valid sign on an integer, and the cap decides
+// by the value rather than the shape: a delay at the cap is honoured
+// and one past it is refused, so the caller backs off on its own.
+func TestRetryAfterReadsSignedSecondsAndTheCap(t *testing.T) {
+	for _, c := range []struct {
+		header  string
+		want    time.Duration
+		tooLong bool
+	}{
+		{"+5", 5 * time.Second, false},
+		{"30", 30 * time.Second, false},
+		{"31", 0, true},
+	} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{c.header}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		switch {
+		case tooLong != c.tooLong:
+			t.Errorf("retryAfter(%q) tooLong = %v, want %v", c.header, tooLong, c.tooLong)
+		case c.tooLong:
+		case !ok:
+			t.Errorf("retryAfter(%q) rejected a valid delay", c.header)
+		case wait != c.want:
+			t.Errorf("retryAfter(%q) = %v, want %v", c.header, wait, c.want)
+		}
+	}
+}
+
 func TestUnparseableRetryAfterFallsBackToThePolicy(t *testing.T) {
 	resp := &http.Response{Header: http.Header{"Retry-After": []string{"soon-ish"}}}
 	if _, ok, _ := retryAfter(resp, 30*time.Second); ok {

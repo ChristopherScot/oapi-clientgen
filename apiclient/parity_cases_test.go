@@ -19,15 +19,15 @@ import (
 // Asserted here rather than left to the comment that says so, because
 // a date a few seconds out looks like an ordinary case to add.
 func TestNoDateCaseFallsInsideTheCap(t *testing.T) {
-	const cap = 30 * time.Second
+	const maxWait = 30 * time.Second
 	for _, header := range apiclient.ParityCases() {
 		when, err := http.ParseTime(header)
 		if err != nil {
 			continue
 		}
-		if d := time.Until(when); d > 0 && d <= cap {
+		if d := time.Until(when); d > 0 && d <= maxWait {
 			t.Errorf("Retry-After %q is %v away, inside the %v cap: each client would compute its own wait and they would disagree over nothing. Use a date in the past, or far enough ahead to exceed the cap.",
-				header, d.Round(time.Second), cap)
+				header, d.Round(time.Second), maxWait)
 		}
 	}
 }

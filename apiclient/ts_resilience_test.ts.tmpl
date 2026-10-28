@@ -229,6 +229,20 @@ test('Retry-After is read in seconds', () => {
   assert.deepEqual(retryAfterMs(res, 30_000), { ms: 2000, tooLong: false })
 })
 
+// A leading plus is a valid sign on an integer, and the cap decides
+// by the value rather than the shape: a delay at the cap is honoured
+// and one past it is refused, so the caller backs off on its own.
+test('Retry-After reads a signed delay and the cap', () => {
+  for (const [header, want] of [
+    ['+5', { ms: 5000, tooLong: false }],
+    ['30', { ms: 30_000, tooLong: false }],
+    ['31', { tooLong: true }],
+  ] as const) {
+    const res = new Response('', { headers: { 'retry-after': header } })
+    assert.deepEqual(retryAfterMs(res, 30_000), want, header)
+  }
+})
+
 test('Retry-After accepts an HTTP-date', () => {
   const when = new Date(Date.now() + 2000).toUTCString()
   const got = retryAfterMs(new Response('', { headers: { 'retry-after': when } }), 30_000)

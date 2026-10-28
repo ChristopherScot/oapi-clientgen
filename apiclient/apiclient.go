@@ -165,8 +165,13 @@ func files(set []templateFile, p Params) ([]File, error) {
 // No case carries an expected answer. Each suite reports what its own
 // client said and the comparison looks for disagreement, so two
 // clients that differ fail even on an input nobody predicted - which a
-// table of expected answers cannot do. Agreement is all this shows:
-// whether an answer is correct is each language's own suite's question.
+// table of expected answers cannot do.
+//
+// Agreement is all this shows. Where a case is also asserted in a
+// language's own suite that suite says what the right answer is; the
+// date cases here are not, so a date both clients read the same wrong
+// way passes. Each suite asserts date handling on a timestamp it
+// generates, which is the behaviour but not these headers.
 //
 // The list is every header that has actually diverged, plus the
 // neighbours of each.
