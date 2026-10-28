@@ -1,6 +1,8 @@
 package apiclient_test
 
 import (
+	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,9 +130,9 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	for _, header := range apiclient.ParityCases() {
 		byVerdict := map[string][]string{}
 		for _, lang := range langs {
-			v := agreedVerdict(answers[lang][header], byVerdict)
-			byVerdict[v] = append(byVerdict[v], lang)
+			byVerdict[answers[lang][header]] = append(byVerdict[answers[lang][header]], lang)
 		}
+		byVerdict = mergeWaitsWithinSkew(byVerdict)
 		why, excepted := parityExceptions[header]
 		switch {
 		case len(byVerdict) == 1 && excepted:
@@ -155,27 +157,53 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 // call a disagreement.
 const clockSkew = 90 * time.Second
 
-// agreedVerdict returns the verdict v should be counted as: an
-// equivalent one already recorded for this header, or v itself.
+// mergeWaitsWithinSkew groups waits that agree into one answer,
+// reporting them under the earliest of them.
 //
-// Only waits are compared loosely, and only against each other. STOP
-// and FALLBACK are classifications with nothing to round, and a wait
-// from a delay in seconds is arithmetic on the header - "2" is 2000ms
-// in both languages or one of them is wrong - so a tolerance there
-// would hide a real defect. Both arrive as exact strings and match or
-// do not.
-func agreedVerdict(v string, seen map[string][]string) string {
-	ms, ok := waitMillis(v)
-	if !ok {
-		return v
+// Only waits are merged, and only with each other. STOP and FALLBACK
+// are classifications with nothing to round, and a wait from a delay
+// in seconds is arithmetic on the header - "2" is 2000ms in both
+// languages or one of them is wrong - so a tolerance there would hide
+// a real defect. Those compare as the exact strings they arrived as.
+//
+// Merged by span rather than by nearest neighbour: with three or more
+// clients a wait can sit within the tolerance of two separate groups,
+// and joining whichever was looked at first makes the result depend on
+// map order. Sorting first, then cutting wherever the spread would
+// exceed the tolerance, gives one answer whatever the order.
+func mergeWaitsWithinSkew(byVerdict map[string][]string) map[string][]string {
+	waits := make([]time.Duration, 0, len(byVerdict))
+	langsFor := map[time.Duration][]string{}
+	merged := map[string][]string{}
+	for v, langs := range byVerdict {
+		ms, ok := waitMillis(v)
+		if !ok {
+			merged[v] = langs
+			continue
+		}
+		if _, seen := langsFor[ms]; !seen {
+			waits = append(waits, ms)
+		}
+		langsFor[ms] = append(langsFor[ms], langs...)
 	}
-	for other := range seen {
-		got, ok := waitMillis(other)
-		if ok && absDuration(got-ms) <= clockSkew {
-			return other
+	slices.Sort(waits)
+
+	for i := 0; i < len(waits); {
+		first := i
+		for i++; i < len(waits) && waits[i]-waits[first] <= clockSkew; i++ {
+		}
+		name := formatWait(waits[first])
+		for _, ms := range waits[first:i] {
+			merged[name] = append(merged[name], langsFor[ms]...)
 		}
 	}
-	return v
+	return merged
+}
+
+// formatWait renders a wait the way the suites print it, so a merged
+// group is named in the same vocabulary as an unmerged one.
+func formatWait(d time.Duration) string {
+	return fmt.Sprintf("WAIT %dms", d.Milliseconds())
 }
 
 // waitMillis reads the duration out of a "WAIT 1234ms" verdict.
@@ -193,13 +221,6 @@ func waitMillis(v string) (time.Duration, bool) {
 		return 0, false
 	}
 	return time.Duration(ms) * time.Millisecond, true
-}
-
-func absDuration(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
-	}
-	return d
 }
 
 // verdicts picks the PARITY lines out of a test runner's output.
