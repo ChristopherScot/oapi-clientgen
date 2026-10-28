@@ -163,9 +163,14 @@ func files(set []templateFile, p Params) ([]File, error) {
 // here, so the list is one thing rather than one per language.
 //
 // No case carries an expected answer. Each suite records what its own
-// client said and the harness compares the records, so two clients
+// client said and the comparison reads the records, so two clients
 // that disagree fail even on an input nobody predicted - which a table
-// of expected answers cannot do.
+// of expected answers cannot do. Agreement is all this shows: whether
+// an answer is correct is each language's own suite's question.
+//
+// Each suite reports its answers on stdout rather than to a shared
+// file, because a file needs a location and a location can hold an
+// answer from a previous run.
 //
 // The list is every header that has actually diverged, plus the
 // neighbours of each.
@@ -185,6 +190,11 @@ var parityCases = []string{
 	"Wed, 21 Oct 2115 24:00:00 GMT",
 	"Funday, 06-Nov-26 08:49:37 GMT",
 }
+
+// ParityCases is a copy of that list, for a comparison that needs to
+// know a client answered every case rather than merely as many as its
+// peers.
+func ParityCases() []string { return slices.Clone(parityCases) }
 
 // retired are files this package used to write and no longer does.
 // Dropping one from the lists above is not enough: the copy on disk

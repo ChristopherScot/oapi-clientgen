@@ -31,6 +31,7 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 		t.Skip("renders a TypeScript client and runs node --test against it")
 	}
 	if _, err := exec.LookPath("node"); err != nil {
+		skipParity("ts", "no node")
 		t.Skip("no node")
 	}
 	requireNode(t, 24)

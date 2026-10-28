@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
 
 // A Retry-After header every generated client answers differently on
@@ -15,9 +17,7 @@ var parityExceptions = map[string]string{}
 // verdicts picks the PARITY lines out of a test runner's output.
 //
 // Tagged rather than parsed positionally because the runner's own
-// chatter shares the stream, and read from the output the harness
-// already captures rather than a file: a file needs a location, and a
-// location can hold an answer from a previous run.
+// chatter shares the stream.
 func verdicts(t *testing.T, lang, out string) map[string]string {
 	t.Helper()
 	got := map[string]string{}
@@ -39,32 +39,44 @@ func verdicts(t *testing.T, lang, out string) map[string]string {
 	return got
 }
 
-// recordParity stores one client's answers for the comparison. The
-// harnesses call it because they are what can run a client; keyed by
-// language so a third generator needs no change here.
+// parityRecord holds each client's answers, keyed by language so a
+// third generator needs no change here.
 var parityRecord = map[string]map[string]string{}
 
+// recordParity stores one client's answers for the comparison. The
+// harnesses call it because they are what can run a client.
+//
+// Every case is required, so a client answering a subset cannot
+// quietly shrink what gets compared rather than failing.
 func recordParity(t *testing.T, lang string, got map[string]string) {
 	t.Helper()
-	if len(got) == 0 {
-		t.Fatalf("the %s client printed no PARITY lines; it would agree with everything", lang)
+	for _, header := range apiclient.ParityCases() {
+		if _, ok := got[header]; !ok {
+			t.Fatalf("the %s client did not answer Retry-After %q; it was rendered every case in apiclient.ParityCases()", lang, header)
+		}
 	}
 	parityRecord[lang] = got
 }
 
 // TestAllClientsAgreeOnRetryAfter compares what every client answered.
 //
-// Ordered after the harnesses that run them by name - Go runs tests in
-// source order within a file, and across files in file order - so
-// "parity" sorting after "generated" is what makes the records exist
-// by the time this reads them. Asserted rather than assumed: with no
-// records this fails rather than passing on an empty comparison.
+// Reads records the harnesses write, so it has to run after them: Go
+// runs tests in source order within a file and across files in file
+// order, which is why this file's name sorts after theirs. A rename
+// that broke the order would leave this with nothing to compare, so
+// too few records is a failure here rather than a pass on an empty
+// comparison - unless a harness said why it could not run a client,
+// which is the one case where no record is the honest answer.
 func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compares what the rendered clients answered")
 	}
+	if len(parityUnavailable) > 0 && len(parityRecord) < 2 {
+		t.Skipf("%d of %d clients ran: %s", len(parityRecord), len(parityRecord)+len(parityUnavailable),
+			strings.Join(parityUnavailable, "; "))
+	}
 	if len(parityRecord) < 2 {
-		t.Skipf("%d client(s) recorded answers; a comparison needs two, and the harnesses that run them skip without node or a network",
+		t.Fatalf("%d client(s) recorded answers and none said why it could not run; a comparison needs two, so this compared nothing",
 			len(parityRecord))
 	}
 
@@ -74,26 +86,12 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	}
 	sort.Strings(langs)
 
-	// Same set, or one client skipped a case and the rest would agree
-	// about whatever is left.
-	for _, lang := range langs[1:] {
-		if len(parityRecord[lang]) != len(parityRecord[langs[0]]) {
-			t.Fatalf("%s answered %d cases and %s answered %d; they were given one list",
-				lang, len(parityRecord[lang]), langs[0], len(parityRecord[langs[0]]))
-		}
-	}
-
 	t.Logf("compared %d cases across %s", len(parityRecord[langs[0]]), strings.Join(langs, ", "))
 
-	for header := range parityRecord[langs[0]] {
+	for _, header := range apiclient.ParityCases() {
 		byVerdict := map[string][]string{}
 		for _, lang := range langs {
-			v, ok := parityRecord[lang][header]
-			if !ok {
-				t.Errorf("%s never answered Retry-After %q", lang, header)
-				continue
-			}
-			byVerdict[v] = append(byVerdict[v], lang)
+			byVerdict[parityRecord[lang][header]] = append(byVerdict[parityRecord[lang][header]], lang)
 		}
 		why, excepted := parityExceptions[header]
 		switch {
@@ -107,6 +105,13 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+// parityUnavailable records a client the harness could not run, and
+// why. Distinguishes a missing toolchain from a comparison that
+// stopped happening.
+var parityUnavailable []string
+
+func skipParity(lang, why string) { parityUnavailable = append(parityUnavailable, lang+": "+why) }
 
 // describe renders "FALLBACK (go), STOP (ts)", so a failure names the
 // answers and who gave them.
