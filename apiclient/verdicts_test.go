@@ -5,70 +5,54 @@ import (
 	"testing"
 )
 
-// A failing test's own output cannot pass itself off as an answer.
-//
-// Assertion messages quote the inputs they were given, so a runner's
-// stream carries text shaped like the recorder's. Reading that as the
-// client's answer would invent a disagreement on a header the clients
-// agreed about, which is worse than missing one: the message names a
-// header and two verdicts, and is specific enough to be believed.
-func TestAFailingTestsOutputIsNotAnAnswer(t *testing.T) {
-	recorded := `PARITY {"+9223372036854775808":"STOP"}`
-	echoed := []string{
-		`  ✖ Retry-After reads a signed delay and the cap`,
-		`    expected "WAIT 25000ms" but got "STOP"`,
-		`    PARITY {"+9223372036854775808":"WAIT 25000ms"}`,
-	}
+// What the harness must refuse, and what it must say about it. The
+// wording is asserted because this harness exists to name the right
+// culprit: a message blaming the client for a broken recorder sends
+// the next reader into the wrong file.
+func TestParseVerdictsRefusesWhatIsNotAnAnswer(t *testing.T) {
+	// The recorder's own line, at column 0.
+	const recorded = `PARITY {"2":"WAIT 2000ms"}`
 
-	got := verdicts(t, "ts", recorded+"\n"+strings.Join(echoed, "\n")+"\n")
-	if v := got["+9223372036854775808"]; v != "STOP" {
-		t.Errorf("recorded %q, want the recorder's own %q", v, "STOP")
+	for _, c := range []struct {
+		name string
+		out  string
+		want string
+	}{
+		{
+			// Assertion output is indented by both runners, so an
+			// echo of these answers is disqualified by that alone.
+			"a failing assertion echoing the answers",
+			recorded + "\n  ✖ Retry-After reads a signed delay\n    PARITY {\"2\":\"WAIT 9999ms\"}\n",
+			"",
+		},
+		{
+			// A bare Printf is not indented, and the recorder is the
+			// last test in its file, so an impostor's line arrives
+			// first. Refusing rather than ranking is what closes it.
+			"an unindented impostor arriving first",
+			"PARITY {\"2\":\"WAIT 9999ms\"}\n" + recorded + "\n",
+			"printed a second PARITY line",
+		},
+		{"no PARITY line at all", "ok  \tprobe\t0.1s\n", "printed no answers"},
+		{"an empty document", "PARITY {}\n", "printed no answers"},
+		{"a null document", "PARITY null\n", "printed no answers"},
+		{"a truncated document", "PARITY {\"2\":\n", "printed an unreadable PARITY line"},
+		{"trailing prose after the document", recorded + " and then some\n", "printed an unreadable PARITY line"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			answers, err := parseVerdicts(c.out)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("refused the recorder's own answers: %v", err)
+			case c.want == "":
+				if answers["2"] != "WAIT 2000ms" {
+					t.Errorf("read %q, want the recorder's own %q", answers["2"], "WAIT 2000ms")
+				}
+			case err == nil:
+				t.Fatalf("accepted it, reading %v", answers)
+			case !strings.Contains(err.Error(), c.want):
+				t.Errorf("complained %q, want something about %q", err, c.want)
+			}
+		})
 	}
-	if len(got) != 1 {
-		t.Errorf("read %d answers, want the 1 the recorder printed: %v", len(got), got)
-	}
-}
-
-// An unindented impostor cannot win by arriving first either.
-//
-// A bare Printf reaches stdout unindented, and the recorder is the
-// last test in its file, so under a reader that took the first
-// document an impostor would have won. Refusing a second rather than
-// ranking them closes that whichever arrives first.
-func TestASecondVerdictLineIsFatal(t *testing.T) {
-	out := "PARITY {\"2\":\"WAIT 9999ms\"}\nPARITY {\"2\":\"WAIT 2000ms\"}\n"
-	if !fatals(func(t *testing.T) { verdicts(t, "go", out) }) {
-		t.Error("picked one of two PARITY documents instead of refusing both")
-	}
-}
-
-// Output with no answers in it is not an empty set of answers.
-func TestNoVerdictLineIsFatal(t *testing.T) {
-	if !fatals(func(t *testing.T) { verdicts(t, "go", "ok  \tprobe\t0.1s\n") }) {
-		t.Error("read answers from output that had none")
-	}
-}
-
-// A truncated or malformed object is a harness that stopped working,
-// not a client that answered nothing.
-func TestAnUnreadableVerdictLineIsFatal(t *testing.T) {
-	if !fatals(func(t *testing.T) { verdicts(t, "go", "PARITY {\"2\":\n") }) {
-		t.Error("accepted a malformed PARITY line")
-	}
-}
-
-// fatals reports whether f failed the test it was given.
-//
-// Its own T, on its own goroutine, because Fatalf ends a goroutine
-// rather than returning: called on ours it would take the whole
-// binary with it. Nothing here calls Fatalf on the T under test, so
-// the rule against failing a test from another goroutine holds.
-func fatals(f func(*testing.T)) bool {
-	done := make(chan bool)
-	go func() {
-		inner := &testing.T{}
-		defer func() { done <- inner.Failed() }()
-		f(inner)
-	}()
-	return <-done
 }

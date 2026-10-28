@@ -2,6 +2,7 @@ package apiclient_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -143,7 +144,18 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	}
 }
 
-// verdicts reads what a client answered out of its runner's output.
+// verdicts reads what a client answered out of its runner's output,
+// and stops the test if it cannot.
+func verdicts(t *testing.T, lang, out string) map[string]string {
+	t.Helper()
+	answers, err := parseVerdicts(out)
+	if err != nil {
+		t.Fatalf("%s %v", lang, err)
+	}
+	return answers
+}
+
+// parseVerdicts finds the recorder's answers in a runner's output.
 //
 // Two things keep a test's own output from passing itself off as the
 // answers, and they cover different halves of it.
@@ -160,31 +172,31 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 // from the recorder, and picking one was how an assertion message
 // once got itself reported as a client's answer.
 //
-// One document rather than a line per case is what makes that
-// refusal possible, and it also makes a partial or interleaved read
-// fail here instead of returning some of the answers.
-func verdicts(t *testing.T, lang, out string) map[string]string {
-	t.Helper()
+// Returns an error rather than taking a *testing.T, so the wording
+// can be asserted: a harness whose job is naming the right culprit
+// should not be free to name the wrong one.
+func parseVerdicts(out string) (map[string]string, error) {
 	var answers map[string]string
 	for _, line := range strings.Split(out, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "PARITY ")
 		if !ok {
 			continue
 		}
-		if answers != nil {
-			t.Fatalf("%s printed a second PARITY line %q; only the recorder prints one, so one of them is not the recorder's", lang, rest)
+		if len(answers) > 0 {
+			return nil, fmt.Errorf("printed a second PARITY line %q; only the recorder prints one, so one of them is not the recorder's", rest)
 		}
 		if err := json.Unmarshal([]byte(rest), &answers); err != nil {
-			t.Fatalf("%s printed an unreadable PARITY line %q: %v", lang, rest, err)
-		}
-		if answers == nil {
-			t.Fatalf("%s printed a PARITY line with no answers in it: %q", lang, rest)
+			return nil, fmt.Errorf("printed an unreadable PARITY line %q: %v", rest, err)
 		}
 	}
-	if answers == nil {
-		t.Fatalf("%s printed no PARITY line", lang)
+	// No line, or one holding "null" or "{}" - both of which decode
+	// without complaint. Either way the recorder answered nothing,
+	// which is a harness that stopped working rather than a client
+	// with nothing to say.
+	if len(answers) == 0 {
+		return nil, fmt.Errorf("printed no answers")
 	}
-	return answers
+	return answers, nil
 }
 
 // describe renders "FALLBACK (go), STOP (ts)", so a failure names the
