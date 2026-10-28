@@ -3,6 +3,7 @@ package {{ .Package }}
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -840,28 +841,37 @@ func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
 }
 
 // Prints what this client answers for each shared Retry-After case,
-// one PARITY line apiece, for the harness that compares the
-// languages. Printed rather than asserted: no expected answer exists
-// here, because what is checked is that every client says the same.
+// for the harness that compares the languages. Printed rather than
+// asserted: no expected answer exists here, because what is checked
+// is that every client says the same.
 //
 // stdout because the comparison runs in another process. A file would
 // need somewhere to put it, and that somewhere can hold a stale
 // answer from a previous run.
+//
+// One JSON object on one line, so the harness reads it or fails to:
+// a test that quotes these answers back in its own output cannot
+// amount to a second document, where a line-per-case format leaves
+// the harness guessing which lines were the recorder's.
 func TestPrintRetryAfterVerdicts(t *testing.T) {
+	answers := map[string]string{}
 	for _, in := range []string{
 {{ range parityCases }}		{{ printf "%q" . }},
 {{ end }}	} {
 		resp := &http.Response{Header: http.Header{"Retry-After": []string{in}}}
 		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
-		var verdict string
 		switch {
 		case tooLong:
-			verdict = "STOP"
+			answers[in] = "STOP"
 		case ok:
-			verdict = fmt.Sprintf("WAIT %dms", wait.Milliseconds())
+			answers[in] = fmt.Sprintf("WAIT %dms", wait.Milliseconds())
 		default:
-			verdict = "FALLBACK"
+			answers[in] = "FALLBACK"
 		}
-		fmt.Printf("PARITY\t%q\t%s\n", in, verdict)
 	}
+	out, err := json.Marshal(answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("PARITY %s\n", out)
 }

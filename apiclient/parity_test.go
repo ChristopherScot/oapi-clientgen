@@ -1,6 +1,7 @@
 package apiclient_test
 
 import (
+	"encoding/json"
 	"slices"
 	"strconv"
 	"strings"
@@ -106,7 +107,7 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	// single bad case rather than a recorder that is gone.
 	incomplete := false
 	for _, lang := range langs {
-		missing := []string{}
+		var missing []string
 		for _, header := range apiclient.ParityCases() {
 			if _, ok := answers[lang][header]; !ok {
 				missing = append(missing, strconv.Quote(header))
@@ -133,7 +134,7 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 		switch {
 		case len(byVerdict) == 1 && excepted:
 			t.Errorf("Retry-After %q agrees everywhere now, so drop it from parityExceptions (listed as: %s)", header, why)
-		case len(byVerdict) == 1:
+		case len(byVerdict) == 1: // agreed, which is the point
 		case excepted:
 			t.Logf("Retry-After %q differs on purpose: %s (%s)", header, describe(byVerdict), why)
 		default:
@@ -142,41 +143,41 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	}
 }
 
-// verdicts picks the PARITY lines out of a test runner's output.
+// verdicts reads what a client answered out of its runner's output.
 //
-// Tagged rather than parsed positionally because the runner's own
-// chatter shares the stream.
+// The recorder prints one JSON object on one line, so this finds that
+// line and decodes it. A failing test that quotes these answers back
+// in its own output cannot amount to a second document, which is why
+// the answers travel as one: a line-per-case format left the harness
+// deciding which of several look-alike lines was the recorder's, and
+// an assertion message could win that argument.
 func verdicts(t *testing.T, lang, out string) map[string]string {
 	t.Helper()
-	got := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "PARITY\t")
+		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "PARITY ")
 		if !ok {
 			continue
 		}
-		quoted, verdict, ok := strings.Cut(rest, "\t")
-		if !ok {
-			t.Fatalf("%s printed a PARITY line with no verdict: %q", lang, line)
+		var got map[string]string
+		if err := json.Unmarshal([]byte(rest), &got); err != nil {
+			t.Fatalf("%s printed an unreadable PARITY line %q: %v", lang, rest, err)
 		}
-		header, err := strconv.Unquote(quoted)
-		if err != nil {
-			t.Fatalf("%s printed an unreadable header %q: %v", lang, quoted, err)
-		}
-		got[header] = verdict
+		return got
 	}
-	return got
+	t.Fatalf("%s printed no PARITY line", lang)
+	return nil
 }
 
 // describe renders "FALLBACK (go), STOP (ts)", so a failure names the
 // answers and who gave them.
 func describe(byVerdict map[string][]string) string {
-	verdicts := make([]string, 0, len(byVerdict))
+	answers := make([]string, 0, len(byVerdict))
 	for v := range byVerdict {
-		verdicts = append(verdicts, v)
+		answers = append(answers, v)
 	}
-	slices.Sort(verdicts)
-	parts := make([]string, 0, len(verdicts))
-	for _, v := range verdicts {
+	slices.Sort(answers)
+	parts := make([]string, 0, len(answers))
+	for _, v := range answers {
 		slices.Sort(byVerdict[v])
 		parts = append(parts, v+" ("+strings.Join(byVerdict[v], ", ")+")")
 	}
