@@ -158,31 +158,12 @@ func verdicts(t *testing.T, lang, out string) map[string]string {
 
 // parseVerdicts finds the recorder's answers in a runner's output.
 //
-// Two things keep a test's own output from passing itself off as the
-// answers, and they cover different halves of it.
-//
-// Only a line beginning "PARITY " at column 0 counts. Both inner
-// runners indent the output of a failing assertion, continuation
-// lines included, so an assertion quoting these answers back is
-// disqualified by that alone. What a test prints deliberately is not:
-// a bare Printf reaches stdout unindented, and node --test does not
-// indent console.log even inside a subtest.
-//
-// So exactly one such line may appear, and a second is refused rather
-// than ranked. The harness cannot tell which of two documents came
-// from the recorder, and picking one was how an assertion message
-// once got itself reported as a client's answer. Counting the lines
-// rather than the answers in them, because an empty document is
-// still a document: skipping it would hand the choice back to
-// whichever line came next.
-//
-// One document rather than a line per case is what makes refusing
-// possible at all, and it also makes a partial or interleaved read
-// fail here instead of returning some of the answers.
-//
-// Returns an error rather than taking a *testing.T, so the wording
-// can be asserted: a harness whose job is naming the right culprit
-// should not be free to name the wrong one.
+// A test's own output shares that stream and can look just like the
+// recorder's. Two things separate them. Both runners indent what a
+// failing assertion prints, so only column 0 counts - though not
+// what a test prints deliberately, which neither runner indents. And
+// the recorder prints one line, so a second is refused: the answers
+// of whichever line a reader preferred would be a guess.
 func parseVerdicts(out string) (map[string]string, error) {
 	var answers map[string]string
 	seen := false
@@ -199,10 +180,8 @@ func parseVerdicts(out string) (map[string]string, error) {
 			return nil, fmt.Errorf("printed an unreadable PARITY line %q: %v", rest, err)
 		}
 	}
-	// No line, or one holding "null" or "{}" - both of which decode
-	// without complaint. Either way the recorder answered nothing,
-	// which is a harness that stopped working rather than a client
-	// with nothing to say.
+	// "null" and "{}" decode without complaint, so an empty result
+	// reaches here rather than failing above.
 	if len(answers) == 0 {
 		return nil, errors.New("printed no answers")
 	}

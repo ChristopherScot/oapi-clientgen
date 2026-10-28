@@ -849,10 +849,8 @@ func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
 // need somewhere to put it, and that somewhere can hold a stale
 // answer from a previous run.
 //
-// One JSON object on one line, and exactly one, so the harness reads
-// the answers or says it could not. A line-per-case format left it
-// deciding which of several look-alike lines were the recorder's,
-// and an assertion message won that once.
+// One JSON object on one line, so a test that prints something
+// answer-shaped cannot amount to a second set of answers.
 func TestPrintRetryAfterVerdicts(t *testing.T) {
 	answers := map[string]string{}
 	for _, in := range []string{
