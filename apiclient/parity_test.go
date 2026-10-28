@@ -145,27 +145,41 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 
 // verdicts reads what a client answered out of its runner's output.
 //
-// The recorder prints one JSON object on one line, so this finds that
-// line and decodes it. A failing test that quotes these answers back
-// in its own output cannot amount to a second document, which is why
-// the answers travel as one: a line-per-case format left the harness
-// deciding which of several look-alike lines was the recorder's, and
-// an assertion message could win that argument.
+// Two things keep a test's own output from passing itself off as the
+// answers. Only a line beginning "PARITY " at column 0 counts, and
+// both runners indent whatever a test prints through them, including
+// the continuation lines of a multi-line message - so a failing
+// assertion quoting these answers back is already disqualified. And
+// exactly one such line may appear: a second is refused rather than
+// ranked, because the harness cannot tell which of two documents came
+// from the recorder, and picking one was how an assertion message
+// once got itself reported as a client's answer.
+//
+// One document rather than a line per case is what makes that
+// refusal possible, and it also makes a partial or interleaved read
+// fail here instead of returning some of the answers.
 func verdicts(t *testing.T, lang, out string) map[string]string {
 	t.Helper()
+	var answers map[string]string
 	for _, line := range strings.Split(out, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "PARITY ")
 		if !ok {
 			continue
 		}
-		var got map[string]string
-		if err := json.Unmarshal([]byte(rest), &got); err != nil {
+		if answers != nil {
+			t.Fatalf("%s printed a second PARITY line %q; only the recorder prints one, so one of them is not the recorder's", lang, rest)
+		}
+		if err := json.Unmarshal([]byte(rest), &answers); err != nil {
 			t.Fatalf("%s printed an unreadable PARITY line %q: %v", lang, rest, err)
 		}
-		return got
+		if answers == nil {
+			t.Fatalf("%s printed a PARITY line with no answers in it: %q", lang, rest)
+		}
 	}
-	t.Fatalf("%s printed no PARITY line", lang)
-	return nil
+	if answers == nil {
+		t.Fatalf("%s printed no PARITY line", lang)
+	}
+	return answers
 }
 
 // describe renders "FALLBACK (go), STOP (ts)", so a failure names the
