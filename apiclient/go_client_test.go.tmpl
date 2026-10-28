@@ -3,6 +3,8 @@ package {{ .Package }}
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -207,6 +209,33 @@ func TestRetryAfterAcceptsAnHTTPDate(t *testing.T) {
 	}
 	if d < 1*time.Second || d > 4*time.Second {
 		t.Errorf("parsed delay = %v, want about 3s", d)
+	}
+}
+
+// A leading plus is a valid sign on an integer, and the cap decides
+// by the value rather than the shape: a delay at the cap is honoured
+// and one past it is refused, so the caller backs off on its own.
+func TestRetryAfterReadsSignedSecondsAndTheCap(t *testing.T) {
+	for _, c := range []struct {
+		header  string
+		want    time.Duration
+		tooLong bool
+	}{
+		{"+5", 5 * time.Second, false},
+		{"30", 30 * time.Second, false},
+		{"31", 0, true},
+	} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{c.header}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		switch {
+		case tooLong != c.tooLong:
+			t.Errorf("retryAfter(%q) tooLong = %v, want %v", c.header, tooLong, c.tooLong)
+		case c.tooLong:
+		case !ok:
+			t.Errorf("retryAfter(%q) rejected a valid delay", c.header)
+		case wait != c.want:
+			t.Errorf("retryAfter(%q) = %v, want %v", c.header, wait, c.want)
+		}
 	}
 }
 
@@ -809,4 +838,40 @@ func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
 	if !none.openedAt.Equal(marker) {
 		t.Error("an ignored non-probe armed the clock and delayed recovery")
 	}
+}
+
+// Prints what this client answers for each shared Retry-After case,
+// for the harness that compares the languages. Printed rather than
+// asserted: no expected answer exists here, because what is checked
+// is that every client says the same.
+//
+// stdout because the comparison runs in another process. A file would
+// need somewhere to put it, and that somewhere can hold a stale
+// answer from a previous run.
+//
+// One JSON object on one line, so a test that prints something
+// answer-shaped cannot amount to a second set of answers.
+func TestPrintRetryAfterVerdicts(t *testing.T) {
+	answers := map[string]string{}
+	for _, in := range []string{
+{{ range parityCases }}		{{ printf "%q" . }},
+{{ end }}	} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{in}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		switch {
+		case tooLong:
+			answers[in] = "STOP"
+		case ok:
+			answers[in] = fmt.Sprintf("WAIT %dms", wait.Milliseconds())
+		default:
+			answers[in] = "FALLBACK"
+		}
+	}
+	// Checked rather than discarded, though a map of strings has
+	// nothing in it that can fail to marshal.
+	out, err := json.Marshal(answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("PARITY %s\n", out)
 }

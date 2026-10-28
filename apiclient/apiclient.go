@@ -72,7 +72,10 @@ func render(name string, p Params) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("apiclient: %w", err)
 	}
-	t, err := template.New(name).Funcs(template.FuncMap{"header": Header}).Parse(string(b))
+	t, err := template.New(name).Funcs(template.FuncMap{
+		"header":      Header,
+		"parityCases": func() []string { return parityCases },
+	}).Parse(string(b))
 	if err != nil {
 		return "", fmt.Errorf("apiclient: parsing %s: %w", name, err)
 	}
@@ -153,6 +156,53 @@ func files(set []templateFile, p Params) ([]File, error) {
 		out = append(out, File{Path: f.path, Body: body})
 	}
 	return out, nil
+}
+
+// parityCases are the Retry-After headers every generated client must
+// answer the same way. Rendered into each language's test suite from
+// here, so the list is one thing rather than one per language.
+//
+// No case carries an expected answer. Each suite reports what its own
+// client said and the comparison looks for disagreement, so two
+// clients that differ fail even on an input nobody predicted - which a
+// table of expected answers cannot do.
+//
+// Agreement is all this shows. Where a case is also asserted in a
+// language's own suite that suite says what the right answer is; the
+// date cases here are not, so a date both clients read the same wrong
+// way passes. Each suite asserts date handling on a timestamp it
+// generates, which is the behaviour but not these headers.
+//
+// The list is every header that has actually diverged, plus the
+// neighbours of each.
+//
+// A date case belongs in the past or far enough ahead to exceed the
+// cap, never inside it: a wait is deadline-minus-now, so a date a few
+// seconds out gives each client its own number and they disagree over
+// nothing. Past dates clamp to 0ms in every language, and distant
+// ones stop instead of waiting, which is what lets the answers be
+// compared exactly. TestNoDateCaseFallsInsideTheCap enforces it.
+//
+// What this does not do is remove the duplication. Each language
+// parses Retry-After with what its own runtime offers, so the rule
+// stays implemented twice and a change to it means editing both
+// templates; one list of inputs catches the two drifting apart rather
+// than keeping them together.
+var parityCases = []string{
+	"2", "30", "31", "3600", "0",
+	"+5", "-0", "-5", "-1",
+	"1.5", "0.5", "0x10", "1e3", "5s", " 5 .5", "soon-ish",
+	"9223372037", "9223372036854775", "9223372036854775807",
+	"9223372036854775808", "+9223372036854775808",
+	"18446744073709551616", "99999999999999999999999999",
+	"Wed, 21 Oct 2115 07:28:00 GMT",
+	"Wednesday, 21-Oct-15 07:28:00 GMT",
+	"Wed Oct 21 07:28:00 2115",
+	"Wed Oct  1 07:28:00 2115",
+	"Xyz, 21 Oct 2115 07:28:00 GMT",
+	"Wed, 21 Zzz 2115 07:28:00 GMT",
+	"Wed, 21 Oct 2115 24:00:00 GMT",
+	"Funday, 06-Nov-26 08:49:37 GMT",
 }
 
 // retired are files this package used to write and no longer does.
