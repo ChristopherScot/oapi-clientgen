@@ -170,7 +170,19 @@ func files(set []templateFile, p Params) ([]File, error) {
 //
 // The list is every header that has actually diverged, plus the
 // neighbours of each.
-
+//
+// A date case belongs in the past or far enough ahead to exceed the
+// cap, never inside it: a wait is deadline-minus-now, so a date a few
+// seconds out gives each client its own number and they disagree over
+// nothing. Past dates clamp to 0ms in every language, and distant
+// ones stop instead of waiting, which is what lets the answers be
+// compared exactly. TestNoDateCaseFallsInsideTheCap enforces it.
+//
+// What this does not do is remove the duplication. Each language
+// parses Retry-After with what its own runtime offers, so the rule
+// stays implemented twice and a change to it means editing both
+// templates; one list of inputs catches the two drifting apart rather
+// than keeping them together.
 var parityCases = []string{
 	"2", "30", "31", "3600", "0",
 	"+5", "-0", "-5", "-1",
@@ -187,15 +199,6 @@ var parityCases = []string{
 	"Wed, 21 Oct 2115 24:00:00 GMT",
 	"Funday, 06-Nov-26 08:49:37 GMT",
 }
-
-// ParityCases is the list, for the comparison in this package's
-// external test - which checks that each client answered every case,
-// so a client answering a subset fails rather than narrowing what
-// gets compared.
-//
-// A copy, so a caller cannot change which cases the suites are
-// rendered.
-func ParityCases() []string { return slices.Clone(parityCases) }
 
 // retired are files this package used to write and no longer does.
 // Dropping one from the lists above is not enough: the copy on disk

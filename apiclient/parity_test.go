@@ -1,14 +1,11 @@
 package apiclient_test
 
 import (
-	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
@@ -86,7 +83,7 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	for lang := range clients {
 		names = append(names, lang)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, lang := range names {
 		switch {
 		case !ran[lang]:
@@ -102,7 +99,7 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	for lang := range answers {
 		langs = append(langs, lang)
 	}
-	sort.Strings(langs)
+	slices.Sort(langs)
 
 	// Every missing case at once: a template that stopped recording
 	// drops all of them, and one header named out of 31 reads like a
@@ -132,7 +129,6 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 		for _, lang := range langs {
 			byVerdict[answers[lang][header]] = append(byVerdict[answers[lang][header]], lang)
 		}
-		byVerdict = mergeWaitsWithinSkew(byVerdict)
 		why, excepted := parityExceptions[header]
 		switch {
 		case len(byVerdict) == 1 && excepted:
@@ -144,83 +140,6 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 			t.Errorf("Retry-After %q: %s", header, describe(byVerdict))
 		}
 	}
-}
-
-// clockSkew is how far apart two clients' waits may be and still
-// count as the same answer.
-//
-// A wait computed from an HTTP date is deadline-minus-now, and the
-// clients read their own clocks in separate processes seconds apart,
-// so the same header gives each a different number. Wide enough to
-// cover the gap between the two runs - the slower client builds for
-// about fifteen seconds - and far below any difference a reader would
-// call a disagreement.
-const clockSkew = 90 * time.Second
-
-// mergeWaitsWithinSkew groups waits that agree into one answer,
-// reporting them under the earliest of them.
-//
-// Only waits are merged, and only with each other. STOP and FALLBACK
-// are classifications with nothing to round, and a wait from a delay
-// in seconds is arithmetic on the header - "2" is 2000ms in both
-// languages or one of them is wrong - so a tolerance there would hide
-// a real defect. Those compare as the exact strings they arrived as.
-//
-// Merged by span rather than by nearest neighbour: with three or more
-// clients a wait can sit within the tolerance of two separate groups,
-// and joining whichever was looked at first makes the result depend on
-// map order. Sorting first, then cutting wherever the spread would
-// exceed the tolerance, gives one answer whatever the order.
-func mergeWaitsWithinSkew(byVerdict map[string][]string) map[string][]string {
-	waits := make([]time.Duration, 0, len(byVerdict))
-	langsFor := map[time.Duration][]string{}
-	merged := map[string][]string{}
-	for v, langs := range byVerdict {
-		ms, ok := waitMillis(v)
-		if !ok {
-			merged[v] = langs
-			continue
-		}
-		if _, seen := langsFor[ms]; !seen {
-			waits = append(waits, ms)
-		}
-		langsFor[ms] = append(langsFor[ms], langs...)
-	}
-	slices.Sort(waits)
-
-	for i := 0; i < len(waits); {
-		first := i
-		for i++; i < len(waits) && waits[i]-waits[first] <= clockSkew; i++ {
-		}
-		name := formatWait(waits[first])
-		for _, ms := range waits[first:i] {
-			merged[name] = append(merged[name], langsFor[ms]...)
-		}
-	}
-	return merged
-}
-
-// formatWait renders a wait the way the suites print it, so a merged
-// group is named in the same vocabulary as an unmerged one.
-func formatWait(d time.Duration) string {
-	return fmt.Sprintf("WAIT %dms", d.Milliseconds())
-}
-
-// waitMillis reads the duration out of a "WAIT 1234ms" verdict.
-func waitMillis(v string) (time.Duration, bool) {
-	digits, ok := strings.CutPrefix(v, "WAIT ")
-	if !ok {
-		return 0, false
-	}
-	digits, ok = strings.CutSuffix(digits, "ms")
-	if !ok {
-		return 0, false
-	}
-	ms, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return time.Duration(ms) * time.Millisecond, true
 }
 
 // verdicts picks the PARITY lines out of a test runner's output.
@@ -255,10 +174,10 @@ func describe(byVerdict map[string][]string) string {
 	for v := range byVerdict {
 		verdicts = append(verdicts, v)
 	}
-	sort.Strings(verdicts)
+	slices.Sort(verdicts)
 	parts := make([]string, 0, len(verdicts))
 	for _, v := range verdicts {
-		sort.Strings(byVerdict[v])
+		slices.Sort(byVerdict[v])
 		parts = append(parts, v+" ("+strings.Join(byVerdict[v], ", ")+")")
 	}
 	return strings.Join(parts, ", ")
