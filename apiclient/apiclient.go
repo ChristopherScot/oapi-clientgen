@@ -170,11 +170,7 @@ func files(set []templateFile, p Params) ([]File, error) {
 //
 // The list is every header that has actually diverged, plus the
 // neighbours of each.
-//
-// A date case belongs far in the future or in the past, never within
-// the 30s cap: the clients read their own clocks in separate
-// processes, so a date a few seconds out makes each compute a
-// different wait and disagree over nothing.
+
 var parityCases = []string{
 	"2", "30", "31", "3600", "0",
 	"+5", "-0", "-5", "-1",

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
@@ -127,7 +128,8 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	for _, header := range apiclient.ParityCases() {
 		byVerdict := map[string][]string{}
 		for _, lang := range langs {
-			byVerdict[answers[lang][header]] = append(byVerdict[answers[lang][header]], lang)
+			v := agreedVerdict(answers[lang][header], byVerdict)
+			byVerdict[v] = append(byVerdict[v], lang)
 		}
 		why, excepted := parityExceptions[header]
 		switch {
@@ -140,6 +142,64 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 			t.Errorf("Retry-After %q: %s", header, describe(byVerdict))
 		}
 	}
+}
+
+// clockSkew is how far apart two clients' waits may be and still
+// count as the same answer.
+//
+// A wait computed from an HTTP date is deadline-minus-now, and the
+// clients read their own clocks in separate processes seconds apart,
+// so the same header gives each a different number. Wide enough to
+// cover the gap between the two runs - the slower client builds for
+// about fifteen seconds - and far below any difference a reader would
+// call a disagreement.
+const clockSkew = 90 * time.Second
+
+// agreedVerdict returns the verdict v should be counted as: an
+// equivalent one already recorded for this header, or v itself.
+//
+// Only waits are compared loosely, and only against each other. STOP
+// and FALLBACK are classifications with nothing to round, and a wait
+// from a delay in seconds is arithmetic on the header - "2" is 2000ms
+// in both languages or one of them is wrong - so a tolerance there
+// would hide a real defect. Both arrive as exact strings and match or
+// do not.
+func agreedVerdict(v string, seen map[string][]string) string {
+	ms, ok := waitMillis(v)
+	if !ok {
+		return v
+	}
+	for other := range seen {
+		got, ok := waitMillis(other)
+		if ok && absDuration(got-ms) <= clockSkew {
+			return other
+		}
+	}
+	return v
+}
+
+// waitMillis reads the duration out of a "WAIT 1234ms" verdict.
+func waitMillis(v string) (time.Duration, bool) {
+	digits, ok := strings.CutPrefix(v, "WAIT ")
+	if !ok {
+		return 0, false
+	}
+	digits, ok = strings.CutSuffix(digits, "ms")
+	if !ok {
+		return 0, false
+	}
+	ms, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return time.Duration(ms) * time.Millisecond, true
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
 
 // verdicts picks the PARITY lines out of a test runner's output.
