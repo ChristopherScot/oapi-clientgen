@@ -146,12 +146,17 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 // verdicts reads what a client answered out of its runner's output.
 //
 // Two things keep a test's own output from passing itself off as the
-// answers. Only a line beginning "PARITY " at column 0 counts, and
-// both runners indent whatever a test prints through them, including
-// the continuation lines of a multi-line message - so a failing
-// assertion quoting these answers back is already disqualified. And
-// exactly one such line may appear: a second is refused rather than
-// ranked, because the harness cannot tell which of two documents came
+// answers, and they cover different halves of it.
+//
+// Only a line beginning "PARITY " at column 0 counts. Both inner
+// runners indent the output of a failing assertion, continuation
+// lines included, so an assertion quoting these answers back is
+// disqualified by that alone. What a test prints deliberately is not:
+// a bare Printf reaches stdout unindented, and node --test does not
+// indent console.log even inside a subtest.
+//
+// So exactly one such line may appear, and a second is refused rather
+// than ranked. The harness cannot tell which of two documents came
 // from the recorder, and picking one was how an assertion message
 // once got itself reported as a client's answer.
 //

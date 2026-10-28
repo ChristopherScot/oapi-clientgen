@@ -31,10 +31,10 @@ func TestAFailingTestsOutputIsNotAnAnswer(t *testing.T) {
 
 // An unindented impostor cannot win by arriving first either.
 //
-// A bare Printf from any test reaches stdout unindented, and the
-// recorder is the last test in its file, so an impostor's line comes
-// first. Refusing a second document rather than ranking them is what
-// closes that.
+// A bare Printf reaches stdout unindented, and the recorder is the
+// last test in its file, so under a reader that took the first
+// document an impostor would have won. Refusing a second rather than
+// ranking them closes that whichever arrives first.
 func TestASecondVerdictLineIsFatal(t *testing.T) {
 	out := "PARITY {\"2\":\"WAIT 9999ms\"}\nPARITY {\"2\":\"WAIT 2000ms\"}\n"
 	if !fatals(func(t *testing.T) { verdicts(t, "go", out) }) {
