@@ -2,6 +2,7 @@ package apiclient_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -194,7 +195,7 @@ func parseVerdicts(out string) (map[string]string, error) {
 	// which is a harness that stopped working rather than a client
 	// with nothing to say.
 	if len(answers) == 0 {
-		return nil, fmt.Errorf("printed no answers")
+		return nil, errors.New("printed no answers")
 	}
 	return answers, nil
 }
