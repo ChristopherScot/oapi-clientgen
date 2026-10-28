@@ -171,21 +171,30 @@ func verdicts(t *testing.T, lang, out string) map[string]string {
 // So exactly one such line may appear, and a second is refused rather
 // than ranked. The harness cannot tell which of two documents came
 // from the recorder, and picking one was how an assertion message
-// once got itself reported as a client's answer.
+// once got itself reported as a client's answer. Counting the lines
+// rather than the answers in them, because an empty document is
+// still a document: skipping it would hand the choice back to
+// whichever line came next.
+//
+// One document rather than a line per case is what makes refusing
+// possible at all, and it also makes a partial or interleaved read
+// fail here instead of returning some of the answers.
 //
 // Returns an error rather than taking a *testing.T, so the wording
 // can be asserted: a harness whose job is naming the right culprit
 // should not be free to name the wrong one.
 func parseVerdicts(out string) (map[string]string, error) {
 	var answers map[string]string
+	seen := false
 	for _, line := range strings.Split(out, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "PARITY ")
 		if !ok {
 			continue
 		}
-		if len(answers) > 0 {
+		if seen {
 			return nil, fmt.Errorf("printed a second PARITY line %q; only the recorder prints one, so one of them is not the recorder's", rest)
 		}
+		seen = true
 		if err := json.Unmarshal([]byte(rest), &answers); err != nil {
 			return nil, fmt.Errorf("printed an unreadable PARITY line %q: %v", rest, err)
 		}

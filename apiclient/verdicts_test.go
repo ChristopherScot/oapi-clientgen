@@ -13,6 +13,9 @@ func TestParseVerdictsRefusesWhatIsNotAnAnswer(t *testing.T) {
 	// The recorder's own line, at column 0.
 	const recorded = `PARITY {"2":"WAIT 2000ms"}`
 
+	// A case the parser must accept rather than complain about.
+	const accepted = ""
+
 	for _, c := range []struct {
 		name string
 		out  string
@@ -23,7 +26,7 @@ func TestParseVerdictsRefusesWhatIsNotAnAnswer(t *testing.T) {
 			// echo of these answers is disqualified by that alone.
 			"a failing assertion echoing the answers",
 			recorded + "\n  ✖ Retry-After reads a signed delay\n    PARITY {\"2\":\"WAIT 9999ms\"}\n",
-			"",
+			accepted,
 		},
 		{
 			// A bare Printf is not indented, and the recorder is the
@@ -31,6 +34,19 @@ func TestParseVerdictsRefusesWhatIsNotAnAnswer(t *testing.T) {
 			// first. Refusing rather than ranking is what closes it.
 			"an unindented impostor arriving first",
 			"PARITY {\"2\":\"WAIT 9999ms\"}\n" + recorded + "\n",
+			"printed a second PARITY line",
+		},
+		{
+			// An empty document is still a document. Skipping it
+			// would hand the choice to whatever came next, which is
+			// the ranking this refuses to do.
+			"an empty impostor arriving first",
+			"PARITY {}\n" + recorded + "\n",
+			"printed a second PARITY line",
+		},
+		{
+			"a null impostor arriving first",
+			"PARITY null\n" + recorded + "\n",
 			"printed a second PARITY line",
 		},
 		{"no PARITY line at all", "ok  \tprobe\t0.1s\n", "printed no answers"},
@@ -42,9 +58,9 @@ func TestParseVerdictsRefusesWhatIsNotAnAnswer(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			answers, err := parseVerdicts(c.out)
 			switch {
-			case c.want == "" && err != nil:
+			case c.want == accepted && err != nil:
 				t.Fatalf("refused the recorder's own answers: %v", err)
-			case c.want == "":
+			case c.want == accepted:
 				if answers["2"] != "WAIT 2000ms" {
 					t.Errorf("read %q, want the recorder's own %q", answers["2"], "WAIT 2000ms")
 				}
