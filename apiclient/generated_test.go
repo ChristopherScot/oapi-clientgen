@@ -101,8 +101,9 @@ func runGoClient(t *testing.T) map[string]string {
 	// output, at the moment that output matters most.
 	//
 	// -v so a passing test's stdout reaches us: the client prints its
-	// Retry-After answers there, and `go test` without -v keeps a
-	// passing test's output to itself.
+	// Retry-After answers there for TestAllClientsAgreeOnRetryAfter,
+	// and `go test` without -v keeps a passing test's output to
+	// itself.
 	cmd := exec.Command("go", "test", "./api/", "-count=1", "-timeout=5m", "-v")
 	cmd.Dir = dir
 	cmd.Env = goflagsCleared()

@@ -35,10 +35,6 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	if testing.Short() {
 		t.Skip("renders a TypeScript client and runs node --test against it")
 	}
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("no node")
-	}
-	requireNode(t, 24)
 	t.Parallel()
 	runTSClient(t)
 }
@@ -46,8 +42,16 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 // runTSClient generates the TypeScript client with hey-api, type-checks
 // it, runs its shipped tests and returns the Retry-After verdicts they
 // printed. See runGoClient on why it returns them.
+//
+// Checks for node itself rather than leaving it to each caller: what
+// this needs is a property of the runner, and a caller that forgot
+// would report a toolchain it cannot run as a fault of the client.
 func runTSClient(t *testing.T) map[string]string {
 	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("no node")
+	}
+	requireNode(t, 24)
 
 	dir := t.TempDir()
 
@@ -181,8 +185,9 @@ func requireNode(t *testing.T, major int) {
 	}
 }
 
-// skipLibCheck because the failure this guards against is in our call
-// into the generated client, not inside node's own type definitions.
+// skipLibCheck reaches only .d.ts files, and the sole one in scope is
+// @types/node: hey-api emits .ts source into generated/, which is
+// checked either way.
 const probeTSConfig = `{
   "compilerOptions": {
     "target": "ES2022",

@@ -170,6 +170,11 @@ func files(set []templateFile, p Params) ([]File, error) {
 //
 // The list is every header that has actually diverged, plus the
 // neighbours of each.
+//
+// A date case belongs far in the future or in the past, never within
+// the 30s cap: the clients read their own clocks in separate
+// processes, so a date a few seconds out makes each compute a
+// different wait and disagree over nothing.
 var parityCases = []string{
 	"2", "30", "31", "3600", "0",
 	"+5", "-0", "-5", "-1",
@@ -187,9 +192,13 @@ var parityCases = []string{
 	"Funday, 06-Nov-26 08:49:37 GMT",
 }
 
-// ParityCases is a copy of that list, for a comparison that needs to
-// know a client answered every case rather than merely as many as its
-// peers.
+// ParityCases is the list, for the comparison in this package's
+// external test - which checks that each client answered every case,
+// so a client answering a subset fails rather than narrowing what
+// gets compared.
+//
+// A copy, so a caller cannot change which cases the suites are
+// rendered.
 func ParityCases() []string { return slices.Clone(parityCases) }
 
 // retired are files this package used to write and no longer does.

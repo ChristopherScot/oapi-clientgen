@@ -1,7 +1,6 @@
 package apiclient_test
 
 import (
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,12 +34,6 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 		"go": runGoClient,
 		"ts": runTSClient,
 	}
-	if _, err := exec.LookPath("node"); err != nil {
-		// One client cannot answer, and the rest would agree with
-		// each other about everything.
-		t.Skip("no node, so only one client can be asked")
-	}
-
 	// Subtests rather than bare goroutines, because the runners call
 	// t.Fatalf and that must happen on the goroutine of the T it
 	// belongs to - from a goroutine of ours it would abandon the run
@@ -51,12 +44,28 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	// every one of them would still be waiting when the comparison
 	// below read the answers. The wrapper returns once they are all
 	// done, which is what makes the answers complete.
+	// The mutex guards the two subtests against each other, not the
+	// read below: parallel siblings write this map at once, which is
+	// a race whatever the values. The wrapper's return already
+	// publishes their writes to us.
 	var mu sync.Mutex
 	answers := map[string]map[string]string{}
+	ran := map[string]bool{}
+	skipped := map[string]bool{}
 	t.Run("clients", func(t *testing.T) {
 		for lang, run := range clients {
 			t.Run(lang, func(t *testing.T) {
 				t.Parallel()
+				// Cleanup, because a runner that skips for want of
+				// its toolchain never reaches the line after it -
+				// and that skip is the thing the comparison most
+				// needs to know about.
+				t.Cleanup(func() {
+					mu.Lock()
+					defer mu.Unlock()
+					ran[lang] = true
+					skipped[lang] = t.Skipped()
+				})
 				got := run(t)
 				mu.Lock()
 				defer mu.Unlock()
@@ -65,20 +74,25 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 		}
 	})
 
-	// A -run that selects one client leaves nothing to compare it
-	// with, which is a filter this test cannot honour rather than a
-	// disagreement - so it says which clients are missing instead of
-	// reporting a count.
-	if len(answers) != len(clients) {
-		missing := make([]string, 0, len(clients))
-		for lang := range clients {
-			if _, ok := answers[lang]; !ok {
-				missing = append(missing, lang)
-			}
+	// A client can be absent for three different reasons and only one
+	// of them is this test's business, so each says which it was: a
+	// skip means the toolchain for that client is missing, no entry at
+	// all means a -run filter excluded it, and a failure has already
+	// reported itself.
+	names := make([]string, 0, len(clients))
+	for lang := range clients {
+		names = append(names, lang)
+	}
+	sort.Strings(names)
+	for _, lang := range names {
+		switch {
+		case !ran[lang]:
+			t.Fatalf("the %s client never ran, so there was nothing to compare; this test needs every client, and -run cannot select a subset of them", lang)
+		case skipped[lang]:
+			t.Skipf("the %s client was skipped, so only one client could be asked", lang)
+		case len(answers[lang]) == 0:
+			t.Fatalf("the %s client answered nothing", lang)
 		}
-		sort.Strings(missing)
-		t.Fatalf("no answers from %s, so there was nothing to compare; this test needs every client, and -run must not select a subset of them",
-			strings.Join(missing, " and "))
 	}
 
 	langs := make([]string, 0, len(answers))
@@ -87,12 +101,25 @@ func TestAllClientsAgreeOnRetryAfter(t *testing.T) {
 	}
 	sort.Strings(langs)
 
-	for lang, got := range answers {
+	// Every missing case at once: a template that stopped recording
+	// drops all of them, and one header named out of 31 reads like a
+	// single bad case rather than a recorder that is gone.
+	incomplete := false
+	for _, lang := range langs {
+		missing := []string{}
 		for _, header := range apiclient.ParityCases() {
-			if _, ok := got[header]; !ok {
-				t.Fatalf("the %s client did not answer Retry-After %q; it was rendered every case in apiclient.ParityCases()", lang, header)
+			if _, ok := answers[lang][header]; !ok {
+				missing = append(missing, strconv.Quote(header))
 			}
 		}
+		if len(missing) > 0 {
+			incomplete = true
+			t.Errorf("the %s client did not answer %d of %d cases in apiclient.ParityCases(): %s",
+				lang, len(missing), len(apiclient.ParityCases()), strings.Join(missing, ", "))
+		}
+	}
+	if incomplete {
+		return
 	}
 
 	t.Logf("compared %d cases across %s", len(apiclient.ParityCases()), strings.Join(langs, ", "))
@@ -129,13 +156,11 @@ func verdicts(t *testing.T, lang, out string) map[string]string {
 		}
 		quoted, verdict, ok := strings.Cut(rest, "\t")
 		if !ok {
-			t.Errorf("%s printed a PARITY line with no verdict: %q", lang, line)
-			return nil
+			t.Fatalf("%s printed a PARITY line with no verdict: %q", lang, line)
 		}
 		header, err := strconv.Unquote(quoted)
 		if err != nil {
-			t.Errorf("%s printed an unreadable header %q: %v", lang, quoted, err)
-			return nil
+			t.Fatalf("%s printed an unreadable header %q: %v", lang, quoted, err)
 		}
 		got[header] = verdict
 	}
