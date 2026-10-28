@@ -869,6 +869,8 @@ func TestPrintRetryAfterVerdicts(t *testing.T) {
 			answers[in] = "FALLBACK"
 		}
 	}
+	// Checked rather than discarded, though a map of strings has
+	// nothing in it that can fail to marshal.
 	out, err := json.Marshal(answers)
 	if err != nil {
 		t.Fatal(err)

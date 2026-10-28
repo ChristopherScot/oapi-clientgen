@@ -58,6 +58,11 @@ func TestAnUnreadableVerdictLineIsFatal(t *testing.T) {
 }
 
 // fatals reports whether f failed the test it was given.
+//
+// Its own T, on its own goroutine, because Fatalf ends a goroutine
+// rather than returning: called on ours it would take the whole
+// binary with it. Nothing here calls Fatalf on the T under test, so
+// the rule against failing a test from another goroutine holds.
 func fatals(f func(*testing.T)) bool {
 	done := make(chan bool)
 	go func() {
