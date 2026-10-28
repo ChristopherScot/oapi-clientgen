@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-clientgen/codegen"
 )
 
 // The TypeScript counterpart of TestTheGeneratedTestsPass, and the
@@ -22,19 +23,31 @@ import (
 // which methods may be retried. A behaviour guaranteed in one language
 // and merely intended in the other is not guaranteed.
 //
-// Cheaper than the Go harness: node strips the types itself (the
-// service templates set an engines floor of 24), so there is no build
-// step, no install, and nothing to download. The whole run is under a
-// second.
+// Runs against hey-api's real output, not a stand-in: the adapter at
+// the bottom of resilience.ts is the one place that names the
+// generator, so a stub of it tests our call against our own guess at
+// the signature. tsc checks it against the emitted types, which node
+// cannot - it strips types rather than checking them.
+//
+// Parallel with the Go harness: nothing is shared between them, so
+// the two builds overlap rather than add up.
 func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	if testing.Short() {
 		t.Skip("renders a TypeScript client and runs node --test against it")
 	}
 	if _, err := exec.LookPath("node"); err != nil {
-		skipParity("ts", "no node")
 		t.Skip("no node")
 	}
 	requireNode(t, 24)
+	t.Parallel()
+	runTSClient(t)
+}
+
+// runTSClient generates the TypeScript client with hey-api, type-checks
+// it, runs its shipped tests and returns the Retry-After verdicts they
+// printed. See runGoClient on why it returns them.
+func runTSClient(t *testing.T) map[string]string {
+	t.Helper()
 
 	dir := t.TempDir()
 
@@ -61,15 +74,15 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 		}
 	}
 
-	// Stands in for hey-api's output. The tests are transport-level
-	// and never call an operation; this exists only because
-	// resilience.ts imports the generated client to build the adapter
-	// at the bottom of the file.
-	gen := filepath.Join(dir, "generated", "client")
-	if err := os.MkdirAll(gen, 0o755); err != nil {
+	// The same spec the Go harness renders, so both clients describe
+	// one API. Its shape is irrelevant - every shipped test is
+	// transport-level and none name an operation - but hey-api needs a
+	// valid document to emit a client at all.
+	if err := os.WriteFile(filepath.Join(dir, "openapi.yml"), []byte(minimalSpec), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(gen, "index.ts"), []byte(stubClient), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "openapi-ts.config.ts"),
+		[]byte(codegen.HeyAPIConfigAtRoot("./openapi.yml")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,6 +97,34 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "package.json"), pkg, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
+	// npx provisions hey-api and tsc into the same temporary install,
+	// so the client is generated and checked by the versions codegen
+	// pins rather than whatever the machine happens to have.
+	gen := codegen.HeyAPICommand("openapi-ts.config.ts")
+	mustRun(t, dir, gen[0], gen[1:]...)
+
+	// What node cannot do. The adapter calls createClient,
+	// createConfig and interceptors.error.use against hey-api's real
+	// types; node strips the annotations and runs the code, so a call
+	// that does not match the emitted signature still passes there.
+	//
+	// allowImportingTsExtensions because a published client's imports
+	// carry '.ts' - see Params.Published - and noEmit because the
+	// types are the only question here.
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(probeTSConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Installed rather than run through npx -p, because tsc resolves
+	// "types" by walking node_modules up from the project - an npx
+	// package lives outside that walk and is not found.
+	//
+	// @types/node is for the shipped test file's own imports:
+	// node:test, node:assert/strict, and Timeout.unref. Major 24
+	// matches the runtime floor requireNode checks.
+	mustRun(t, dir, "npm", "install", "--no-audit", "--no-fund", "--silent",
+		"typescript@"+codegen.TypescriptVersion, "@types/node@24")
+	mustRun(t, dir, "npx", "tsc", "-p", "tsconfig.json")
 
 	// --test-timeout so a wedged test is reported rather than waited
 	// on, and a deadline on the process because the flag does not end
@@ -105,15 +146,13 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err = cmd.Run()
 	if ctx.Err() != nil {
-		t.Errorf("node --test in %s never exited; killed after %v\n%s",
+		t.Fatalf("node --test in %s never exited; killed after %v\n%s",
 			dir, 2*time.Minute, indent(out.String()))
-		return
 	}
 	if err != nil {
-		t.Errorf("node --test in %s: %v\n%s", dir, err, indent(out.String()))
-		return
+		t.Fatalf("node --test in %s: %v\n%s", dir, err, indent(out.String()))
 	}
-	recordParity(t, "ts", verdicts(t, "ts", out.String()))
+	return verdicts(t, "ts", out.String())
 }
 
 // requireNode fails unless node is at least major, which is the floor
@@ -142,9 +181,19 @@ func requireNode(t *testing.T, major int) {
 	}
 }
 
-const stubClient = `export const createClient = (c: any) => ({
-  interceptors: { error: { use: (_f: any) => {} } },
-  ...c,
-})
-export const createConfig = (c: any) => c
+// skipLibCheck because the failure this guards against is in our call
+// into the generated client, not inside node's own type definitions.
+const probeTSConfig = `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["*.ts", "generated/**/*.ts"]
+}
 `

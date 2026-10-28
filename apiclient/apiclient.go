@@ -162,15 +162,11 @@ func files(set []templateFile, p Params) ([]File, error) {
 // answer the same way. Rendered into each language's test suite from
 // here, so the list is one thing rather than one per language.
 //
-// No case carries an expected answer. Each suite records what its own
-// client said and the comparison reads the records, so two clients
-// that disagree fail even on an input nobody predicted - which a table
-// of expected answers cannot do. Agreement is all this shows: whether
-// an answer is correct is each language's own suite's question.
-//
-// Each suite reports its answers on stdout rather than to a shared
-// file, because a file needs a location and a location can hold an
-// answer from a previous run.
+// No case carries an expected answer. Each suite reports what its own
+// client said and the comparison looks for disagreement, so two
+// clients that differ fail even on an input nobody predicted - which a
+// table of expected answers cannot do. Agreement is all this shows:
+// whether an answer is correct is each language's own suite's question.
 //
 // The list is every header that has actually diverged, plus the
 // neighbours of each.

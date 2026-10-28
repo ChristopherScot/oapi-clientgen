@@ -32,6 +32,18 @@ func TestTheGeneratedTestsPass(t *testing.T) {
 	if testing.Short() {
 		t.Skip("renders a client, downloads modules and runs go test against it")
 	}
+	t.Parallel()
+	runGoClient(t)
+}
+
+// runGoClient renders the Go client, runs its shipped tests and
+// returns the Retry-After verdicts they printed.
+//
+// Returns them rather than storing them, so a caller that wants the
+// answers renders its own client and nothing is left behind for
+// another test to depend on.
+func runGoClient(t *testing.T) map[string]string {
+	t.Helper()
 
 	dir := t.TempDir()
 	api := filepath.Join(dir, "api")
@@ -89,17 +101,16 @@ func TestTheGeneratedTestsPass(t *testing.T) {
 	// output, at the moment that output matters most.
 	//
 	// -v so a passing test's stdout reaches us: the client prints its
-	// Retry-After answers there for TestAllClientsAgreeOnRetryAfter,
-	// and `go test` without -v keeps a passing test's output to itself.
+	// Retry-After answers there, and `go test` without -v keeps a
+	// passing test's output to itself.
 	cmd := exec.Command("go", "test", "./api/", "-count=1", "-timeout=5m", "-v")
 	cmd.Dir = dir
 	cmd.Env = goflagsCleared()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Errorf("go test ./api/ in %s: %v\n%s", dir, err, indent(string(out)))
-		return
+		t.Fatalf("go test ./api/ in %s: %v\n%s", dir, err, indent(string(out)))
 	}
-	recordParity(t, "go", verdicts(t, "go", string(out)))
+	return verdicts(t, "go", string(out))
 }
 
 // mustRun fails the test rather than skipping it. A skip here would be
