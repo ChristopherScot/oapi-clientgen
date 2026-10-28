@@ -24,36 +24,36 @@ func TestParseVerdictsRefusesWhatIsNotAnAnswer(t *testing.T) {
 		{
 			// Assertion output is indented by both runners, so an
 			// echo of these answers is disqualified by that alone.
-			"a failing assertion echoing the answers",
-			recorded + "\n  ✖ Retry-After reads a signed delay\n    PARITY {\"2\":\"WAIT 9999ms\"}\n",
-			accepted,
+			name: "a failing assertion echoing the answers",
+			out:  recorded + "\n  ✖ Retry-After reads a signed delay\n    PARITY {\"2\":\"WAIT 9999ms\"}\n",
+			want: accepted,
 		},
 		{
 			// A bare Printf is not indented, and the recorder is the
 			// last test in its file, so an impostor's line arrives
 			// first. Refusing rather than ranking is what closes it.
-			"an unindented impostor arriving first",
-			"PARITY {\"2\":\"WAIT 9999ms\"}\n" + recorded + "\n",
-			"printed a second PARITY line",
+			name: "an unindented impostor arriving first",
+			out:  "PARITY {\"2\":\"WAIT 9999ms\"}\n" + recorded + "\n",
+			want: "printed a second PARITY line",
 		},
 		{
 			// An empty document is still a document. Skipping it
 			// would hand the choice to whatever came next, which is
 			// the ranking this refuses to do.
-			"an empty impostor arriving first",
-			"PARITY {}\n" + recorded + "\n",
-			"printed a second PARITY line",
+			name: "an empty impostor arriving first",
+			out:  "PARITY {}\n" + recorded + "\n",
+			want: "printed a second PARITY line",
 		},
 		{
-			"a null impostor arriving first",
-			"PARITY null\n" + recorded + "\n",
-			"printed a second PARITY line",
+			name: "a null impostor arriving first",
+			out:  "PARITY null\n" + recorded + "\n",
+			want: "printed a second PARITY line",
 		},
-		{"no PARITY line at all", "ok  \tprobe\t0.1s\n", "printed no answers"},
-		{"an empty document", "PARITY {}\n", "printed no answers"},
-		{"a null document", "PARITY null\n", "printed no answers"},
-		{"a truncated document", "PARITY {\"2\":\n", "printed an unreadable PARITY line"},
-		{"trailing prose after the document", recorded + " and then some\n", "printed an unreadable PARITY line"},
+		{name: "no PARITY line at all", out: "ok  \tprobe\t0.1s\n", want: "printed no answers"},
+		{name: "an empty document", out: "PARITY {}\n", want: "printed no answers"},
+		{name: "a null document", out: "PARITY null\n", want: "printed no answers"},
+		{name: "a truncated document", out: "PARITY {\"2\":\n", want: "printed an unreadable PARITY line"},
+		{name: "trailing prose after the document", out: recorded + " and then some\n", want: "printed an unreadable PARITY line"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			answers, err := parseVerdicts(c.out)
