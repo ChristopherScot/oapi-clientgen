@@ -634,3 +634,18 @@ test('omitting the breaker disables breaking', async () => {
   }
   assert.equal(s.count, 10, 'something started refusing without a breaker configured')
 })
+
+// Prints what this client answers for each shared Retry-After case,
+// for the harness that compares the languages. See the Go recorder
+// for why this prints rather than asserts, and to stdout rather than
+// a file.
+test('print the Retry-After verdicts', () => {
+  for (const input of [
+{{ range parityCases }}    {{ printf "%q" . }},
+{{ end }}  ]) {
+    const res = new Response('', { headers: { 'retry-after': input } })
+    const { ms, tooLong } = retryAfterMs(res, 30_000)
+    const verdict = tooLong ? 'STOP' : ms !== undefined ? `WAIT ${ms}ms` : 'FALLBACK'
+    console.log(`PARITY\t${JSON.stringify(input)}\t${verdict}`)
+  }
+})

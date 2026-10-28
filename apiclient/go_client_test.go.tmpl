@@ -3,6 +3,7 @@ package {{ .Package }}
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -808,5 +809,32 @@ func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
 	none.record(ignore)
 	if !none.openedAt.Equal(marker) {
 		t.Error("an ignored non-probe armed the clock and delayed recovery")
+	}
+}
+
+// Prints what this client answers for each shared Retry-After case,
+// one PARITY line apiece, for the harness that compares the
+// languages. Printed rather than asserted: no expected answer exists
+// here, because what is checked is that every client says the same.
+//
+// stdout because the comparison runs in another process. A file would
+// need somewhere to put it, and that somewhere can hold a stale
+// answer from a previous run.
+func TestPrintRetryAfterVerdicts(t *testing.T) {
+	for _, in := range []string{
+{{ range parityCases }}		{{ printf "%q" . }},
+{{ end }}	} {
+		resp := &http.Response{Header: http.Header{"Retry-After": []string{in}}}
+		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		var verdict string
+		switch {
+		case tooLong:
+			verdict = "STOP"
+		case ok:
+			verdict = fmt.Sprintf("WAIT %dms", wait.Milliseconds())
+		default:
+			verdict = "FALLBACK"
+		}
+		fmt.Printf("PARITY\t%q\t%s\n", in, verdict)
 	}
 }

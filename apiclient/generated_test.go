@@ -87,12 +87,19 @@ func TestTheGeneratedTestsPass(t *testing.T) {
 	// -timeout so a hung inner run reports inside the outer test's own
 	// 10m budget. Killed from above, it would be reaped without its
 	// output, at the moment that output matters most.
-	cmd := exec.Command("go", "test", "./api/", "-count=1", "-timeout=5m")
+	//
+	// -v so a passing test's stdout reaches us: the client prints its
+	// Retry-After answers there for TestAllClientsAgreeOnRetryAfter,
+	// and `go test` without -v keeps a passing test's output to itself.
+	cmd := exec.Command("go", "test", "./api/", "-count=1", "-timeout=5m", "-v")
 	cmd.Dir = dir
 	cmd.Env = goflagsCleared()
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		t.Errorf("go test ./api/ in %s: %v\n%s", dir, err, indent(string(out)))
+		return
 	}
+	recordParity(t, "go", verdicts(t, "go", string(out)))
 }
 
 // mustRun fails the test rather than skipping it. A skip here would be

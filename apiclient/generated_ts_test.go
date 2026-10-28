@@ -110,7 +110,9 @@ func TestTheGeneratedTypeScriptTestsPass(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("node --test in %s: %v\n%s", dir, err, indent(out.String()))
+		return
 	}
+	recordParity(t, "ts", verdicts(t, "ts", out.String()))
 }
 
 // requireNode fails unless node is at least major, which is the floor
