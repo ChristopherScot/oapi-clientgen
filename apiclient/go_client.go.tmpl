@@ -171,19 +171,67 @@ func permanentProtocolError(status int) bool {
 // behind a timeout it is going to hit anyway.
 var ErrCircuitOpen = errors.New("circuit open")
 
-// Breaker trips after FailedRequests consecutive failures and lets
-// one request through every Cooldown to probe recovery.
-type Breaker struct {
-	// FailedRequests is how many consecutive failed REQUESTS open the
-	// circuit. A request that exhausted its retries counts once.
-	//
-	// Zero lets everything through. Use WithBreaker, which sets it
-	// explicitly.
-	FailedRequests int
-	Cooldown       time.Duration
+// BreakerPolicy is when a dependency has failed enough to stop asking.
+//
+// A rate over a window rather than a run of consecutive failures: a
+// dependency answering two requests in three with a 500 is one to shed
+// load from, and under a consecutive count the one success in three
+// clears the run forever. Measured per REQUEST, so one that exhausted
+// its retries counts once.
+type BreakerPolicy struct {
+	// Window is how far back the rate is measured.
+	Window time.Duration
+	// MinRequests is how many requests the window needs before a rate
+	// means anything. Below it the circuit stays closed: two failures
+	// out of two is 100% and says almost nothing.
+	MinRequests int
+	// FailPercent is the share of failed requests that opens the
+	// circuit, as a whole number out of 100.
+	FailPercent int
+	// Cooldown is how long an open circuit waits before letting one
+	// request through to find out whether the dependency is back.
+	Cooldown time.Duration
+}
 
-	mu       sync.Mutex
-	failures int
+// DefaultBreakerPolicy is what WithBreaker installs when asked for
+// breaking without a policy.
+//
+// 50% where wag's hystrix default is 90%: that figure suits a window
+// holding thousands of requests, where a service at 89% errors is
+// still serving hundreds. At the request rates these clients see, a
+// dependency failing half of what it is asked is unwell.
+func DefaultBreakerPolicy() BreakerPolicy {
+	return BreakerPolicy{
+		Window:      10 * time.Second,
+		MinRequests: 20,
+		FailPercent: 50,
+		Cooldown:    30 * time.Second,
+	}
+}
+
+// off reports whether this policy asks for nothing. A zero Window or
+// MinRequests describes no measurement, and a zero FailPercent would
+// otherwise read as "open at no failures at all" - the opposite of
+// what a caller leaving it unset means.
+func (p BreakerPolicy) off() bool {
+	return p.Window <= 0 || p.MinRequests <= 0 || p.FailPercent <= 0
+}
+
+// Breaker trips when a policy's failure rate is reached and lets one
+// request through every Cooldown to probe recovery.
+//
+// A zero-valued Breaker lets everything through: its policy is off.
+type Breaker struct {
+	// Policy is when to open. Zero means never.
+	Policy BreakerPolicy
+
+	mu sync.Mutex
+	// outcomes is the window, oldest first: one entry per request,
+	// holding when it finished and whether it failed. Trimmed on
+	// every read rather than on a timer, so a client nobody is using
+	// holds nothing.
+	outcomes []attempt
+	open     bool
 	openedAt time.Time
 	// probing is true while one caller is through the half-open gate
 	// and has not reported back. Without it every caller waiting out
@@ -193,20 +241,52 @@ type Breaker struct {
 	probing bool
 }
 
+// attempt is one request's contribution to the window.
+type attempt struct {
+	at     time.Time
+	failed bool
+}
+
 func (b *Breaker) allow() bool {
+	if b.Policy.off() {
+		return true
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.failures < b.FailedRequests {
+	if !b.open {
 		return true
 	}
 	// Open. One caller past the cooldown gets through to find out
 	// whether the dependency is back; everyone else waits for its
 	// verdict rather than joining it.
-	if !b.probing && time.Since(b.openedAt) > b.Cooldown {
+	if !b.probing && time.Since(b.openedAt) > b.Policy.Cooldown {
 		b.probing = true
 		return true
 	}
 	return false
+}
+
+// rate trims the window and reports the failure percentage in it,
+// and whether there were enough requests for that to mean anything.
+// Caller holds the lock.
+func (b *Breaker) rate(now time.Time) (pct int, enough bool) {
+	cut := now.Add(-b.Policy.Window)
+	keep := 0
+	for keep < len(b.outcomes) && b.outcomes[keep].at.Before(cut) {
+		keep++
+	}
+	b.outcomes = b.outcomes[keep:]
+
+	if len(b.outcomes) < b.Policy.MinRequests {
+		return 0, false
+	}
+	failed := 0
+	for _, a := range b.outcomes {
+		if a.failed {
+			failed++
+		}
+	}
+	return failed * 100 / len(b.outcomes), true
 }
 
 // record is the other half of allow. It takes the probe slot back if
@@ -214,51 +294,72 @@ func (b *Breaker) allow() bool {
 // cooldown when the circuit is open and this request did not prove
 // recovery.
 func (b *Breaker) record(o outcome) {
+	if b.Policy.off() {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	probe := b.probing
 	b.probing = false
 
-	// Each outcome declares what it PROVED, and the clock below reads
-	// those rather than the outcome's name. An outcome added later
-	// has to say so to count as recovery or as a failure, and
-	// silence gets the conservative answer on both.
-	//
-	// Keyed on the name instead, a second success-like outcome would
-	// arm the clock on a breaker that had just recovered, and a
-	// failure-like one would extend the run without moving the
-	// cooldown - which is the early-expiry bug the >= below exists
-	// to prevent, arriving from the other side.
-	recovered, extended := false, false
+	// Each outcome declares what it PROVED, and the window below
+	// takes only those. An outcome added later has to say so to count
+	// either way, and silence keeps it out of the rate rather than
+	// landing in it as a success.
+	recovered, counted := false, false
 	switch o {
 	case healthy:
-		b.failures = 0
-		recovered = true
+		recovered, counted = true, true
 	case unwell:
-		b.failures++
-		extended = true
+		counted = true
 	case ignore:
-		// Tells us nothing, so the run stands: neither extended nor
-		// cleared.
+		// Says nothing about the dependency, so it is not a data
+		// point: a 501 on one route or a caller that gave up should
+		// neither open the circuit nor argue against opening it.
+	}
+
+	now := time.Now()
+	if counted {
+		b.outcomes = append(b.outcomes, attempt{at: now, failed: !recovered})
 	}
 
 	// A probe that did not prove recovery spends its slot and costs a
 	// full cooldown. Without this an open circuit hands a fresh probe
 	// to every caller the moment the first one reports back.
 	if probe && !recovered {
-		b.openedAt = time.Now()
+		b.openedAt = now
+		return
+	}
+	// One success is not recovery on its own - the rate below decides
+	// - but a probe that got one has earned the window a fresh look.
+	if probe && recovered {
+		b.open = false
+		b.outcomes = nil
 		return
 	}
 
-	// A failure moves the clock so the cooldown is measured from the
-	// last one rather than the first.
-	//
-	// >= not ==: requests already in flight when the breaker tripped
-	// land afterwards, and with == their failures would not move it,
-	// so the cooldown would expire early.
-	if extended && b.failures >= b.FailedRequests {
-		b.openedAt = time.Now()
+	// Only a request that said something can move the circuit. An
+	// ignored one adds no data point, so re-reading the rate for it
+	// would re-arm the cooldown on evidence that has not changed -
+	// pushing recovery further away every time a caller cancels.
+	if !counted {
+		return
+	}
+
+	pct, enough := b.rate(now)
+	switch {
+	case !enough:
+		// Too few requests to judge. An open circuit stays open; it
+		// was opened on evidence and nothing has replaced it.
+	case pct >= b.Policy.FailPercent:
+		// Re-armed on every failing read, not only the first, so the
+		// cooldown is measured from the last failure rather than the
+		// one that opened the circuit.
+		b.open = true
+		b.openedAt = now
+	default:
+		b.open = false
 	}
 }
 
@@ -280,13 +381,23 @@ func WithPolicy(p RetryPolicy) TransportOption {
 	return func(c *HTTPClient) { c.policy = p }
 }
 
-// WithBreaker turns on circuit breaking, which is otherwise off.
-// failedRequests counts whole REQUESTS: one that exhausted its
-// retries counts once. 5 and 30s are the usual pair, and what the
-// TypeScript client's new Breaker() uses when given nothing.
-func WithBreaker(failedRequests int, cooldown time.Duration) TransportOption {
+// WithBreaker turns on circuit breaking with DefaultBreakerPolicy,
+// which is otherwise off. Breaking measures whole REQUESTS: one that
+// exhausted its retries counts once.
+func WithBreaker() TransportOption {
+	return WithBreakerPolicy(DefaultBreakerPolicy())
+}
+
+// WithBreakerPolicy turns on circuit breaking with a policy of your
+// own. Start from DefaultBreakerPolicy and change what you need, so a
+// field added later keeps its default rather than becoming zero:
+//
+//	p := api.DefaultBreakerPolicy()
+//	p.FailPercent = 80
+//	c, err := api.New(url, "webapp", api.WithBreakerPolicy(p))
+func WithBreakerPolicy(p BreakerPolicy) TransportOption {
 	return func(c *HTTPClient) {
-		c.breaker = &Breaker{FailedRequests: failedRequests, Cooldown: cooldown}
+		c.breaker = &Breaker{Policy: p}
 	}
 }
 
@@ -348,7 +459,7 @@ func NewHTTPClient(name string, opts ...TransportOption) *HTTPClient {
 //
 //	c, err := api.New(url, "webapp")
 //	c, err := api.New(url, "webapp", api.WithPolicy(api.ExponentialRetry{}))
-//	c, err := api.New(url, "webapp", api.WithBreaker(5, 30*time.Second))
+//	c, err := api.New(url, "webapp", api.WithBreaker())
 //
 // NewClient, which ogen generates, installs none of it - its default
 // is http.DefaultClient, which has NO timeout. It stays reachable for
