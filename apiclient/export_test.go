@@ -11,16 +11,15 @@ import "slices"
 // suites are rendered.
 func ParityCases() []string { return slices.Clone(parityCases) }
 
-// Defaults is a copy of the numbers both templates render, for a test
-// that checks they reached both.
-func Defaults() map[string]int {
-	return map[string]int{
-		"TimeoutMs":       defaults.TimeoutMs,
-		"SingleBackoffMs": defaults.SingleBackoffMs,
-		"MaxRetryAfterMs": defaults.MaxRetryAfterMs,
-		"BreakerWindowMs": defaults.BreakerWindowMs,
-		"BreakerMinReqs":  defaults.BreakerMinReqs,
-		"BreakerFailPct":  defaults.BreakerFailPct,
-		"BreakerCooldown": defaults.BreakerCooldown,
-	}
+// Defaults is the numbers both templates render, for a test that
+// checks they reached both.
+func Defaults() sharedDefaults { return defaults }
+
+// RenderWith renders one template with the shared numbers supplied, so
+// a test can vary them and see whether the templates read them.
+func RenderWith(name string, p Params, d sharedDefaults) (string, error) {
+	return renderWith(name, p, d)
 }
+
+// Verdicts is the vocabulary both recorders render.
+func Verdicts() verdictWords { return verdictVocabulary }

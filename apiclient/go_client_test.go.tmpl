@@ -995,11 +995,11 @@ func TestPrintRetryAfterVerdicts(t *testing.T) {
 		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
 		switch {
 		case tooLong:
-			answers[in] = "{{ (verdicts).Stop }}"
+			answers[in] = "{{ verdicts.Stop }}"
 		case ok:
-			answers[in] = fmt.Sprintf("{{ (verdicts).GoWait }}", wait.Milliseconds())
+			answers[in] = fmt.Sprintf("{{ verdicts.GoWait }}", wait.Milliseconds())
 		default:
-			answers[in] = "{{ (verdicts).Fallback }}"
+			answers[in] = "{{ verdicts.Fallback }}"
 		}
 	}
 	// Checked rather than discarded, though a map of strings has

@@ -68,6 +68,12 @@ type Params struct {
 }
 
 func render(name string, p Params) (string, error) {
+	return renderWith(name, p, defaults)
+}
+
+// renderWith is render with the shared numbers supplied, so a test can
+// vary them and see whether the templates actually read them.
+func renderWith(name string, p Params, d sharedDefaults) (string, error) {
 	b, err := templates.ReadFile(name)
 	if err != nil {
 		return "", fmt.Errorf("apiclient: %w", err)
@@ -75,8 +81,8 @@ func render(name string, p Params) (string, error) {
 	t, err := template.New(name).Funcs(template.FuncMap{
 		"header":      Header,
 		"parityCases": func() []string { return parityCases },
-		"defaults":    func() any { return defaults },
-		"verdicts":    func() any { return verdicts },
+		"defaults":    func() sharedDefaults { return d },
+		"verdicts":    func() verdictWords { return verdictVocabulary },
 	}).Parse(string(b))
 	if err != nil {
 		return "", fmt.Errorf("apiclient: parsing %s: %w", name, err)
@@ -163,18 +169,18 @@ func files(set []templateFile, p Params) ([]File, error) {
 // verdicts are the words a recorder prints for what its client made of
 // a Retry-After header, and the comparison reads back.
 //
-// Rendered into both test templates from here. Spelled independently
-// they were a wire format with no definition: a typo in one language
-// reads as every case diverging, and a drift in the WAIT form reads as
-// arithmetic disagreement, neither of which the harness can tell from
-// a real difference.
-var verdicts = struct {
+// A wire format: the recorders print these and the comparison reads
+// them back, so a difference in spelling reads as every case of that
+// verdict diverging rather than as the typo it is.
+type verdictWords struct {
 	Stop, Fallback string
 	// GoWait and TSWait are the same sentence in each language's own
 	// formatting: one Printf verb, one template literal. Kept beside
 	// each other so a change to the shape has to touch both.
 	GoWait, TSWait string
-}{
+}
+
+var verdictVocabulary = verdictWords{
 	Stop:     "STOP",
 	Fallback: "FALLBACK",
 	GoWait:   "WAIT %dms",
@@ -184,29 +190,39 @@ var verdicts = struct {
 // defaults are the numbers both languages are specified to share.
 //
 // Rendered into each template from here, so a change lands in both or
-// in neither. Written twice as literals they drifted silently: nothing
-// compares 5s against 5000, and a client whose timeout moved in one
-// language only is a difference nobody would see until a service
-// behaved differently depending on what it was written in.
+// in neither. Nothing compares 5s against 5000, so a timeout that
+// moved in one language only would be a difference no test could see.
 //
 // Durations are milliseconds because that is the unit TypeScript has;
 // the Go template renders them back into time.Duration.
-var defaults = struct {
+type sharedDefaults struct {
 	TimeoutMs       int
 	SingleBackoffMs int
-	MaxRetryAfterMs int
-	BreakerWindowMs int
-	BreakerMinReqs  int
-	BreakerFailPct  int
-	BreakerCooldown int
-}{
-	TimeoutMs:       5000,
-	SingleBackoffMs: 1000,
-	MaxRetryAfterMs: 30000,
-	BreakerWindowMs: 10000,
-	BreakerMinReqs:  20,
-	BreakerFailPct:  50,
-	BreakerCooldown: 30000,
+	ExpSeedMs       int
+	ExpAttempts     int
+	// ExpJitterPct is how far either side of a backoff the jitter may
+	// move it, so a fleet does not retry in lockstep. A percentage
+	// rather than a fraction because the templates render it into two
+	// languages and 25 survives both.
+	ExpJitterPct      int
+	MaxRetryAfterMs   int
+	BreakerWindowMs   int
+	BreakerMinReqs    int
+	BreakerFailPct    int
+	BreakerCooldownMs int
+}
+
+var defaults = sharedDefaults{
+	TimeoutMs:         5000,
+	SingleBackoffMs:   1000,
+	ExpSeedMs:         100,
+	ExpAttempts:       5,
+	ExpJitterPct:      25,
+	MaxRetryAfterMs:   30000,
+	BreakerWindowMs:   10000,
+	BreakerMinReqs:    20,
+	BreakerFailPct:    50,
+	BreakerCooldownMs: 30000,
 }
 
 // parityCases are the Retry-After headers every generated client must

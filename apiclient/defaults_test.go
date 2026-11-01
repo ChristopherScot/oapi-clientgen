@@ -8,62 +8,76 @@ import (
 	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
 
-// Every shared default reaches both languages.
+// Every shared number reaches both languages, and reaches them from
+// the declaration rather than from a literal that happens to match it.
 //
-// The numbers used to be literals in two templates with nothing
-// comparing them, so a timeout that moved in one language only was a
-// difference no test could see - and the clients are specified to
-// agree on exactly these. Rendering them from one declaration is what
-// makes that impossible; this is what proves the rendering happened,
-// rather than a template quietly losing its action.
+// Rendered twice with different numbers: a template carrying a literal
+// renders the same thing both times, which asserting against today's
+// values cannot see.
 func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 	p := apiclient.Params{
 		Name: "probe", Version: "1.0.0", Package: "api",
 		ImportPath: "example.com/probe/api",
 	}
-	goFiles, err := apiclient.Go(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tsFiles, err := apiclient.TypeScript(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rendered := map[string]string{}
-	for _, f := range append(goFiles, tsFiles...) {
-		rendered[f.Path] = f.Body
-	}
 
 	d := apiclient.Defaults()
-	ms := func(k string) string { return strconv.Itoa(d[k]) }
+	// Each field moved to a value long enough not to appear anywhere
+	// else in the rendered output, so a crossed wire shows up as a
+	// miss rather than as a coincidental match. The second assertion
+	// below is what enforces that.
+	other := d
+	other.TimeoutMs = 5111
+	other.SingleBackoffMs = 1222
+	other.MaxRetryAfterMs = 30333
+	other.BreakerWindowMs = 10444
+	other.BreakerMinReqs = 20666
+	other.BreakerFailPct = 50777
+	other.BreakerCooldownMs = 30555
+	other.ExpSeedMs = 100888
+	other.ExpAttempts = 5999
+	other.ExpJitterPct = 26111
 
-	// The construct each value is rendered into, not the digits: a
-	// number alone also appears in prose, so a code line that dropped
-	// back to a literal would still be "found" in a doc comment.
-	for _, c := range []struct{ file, want string }{
-		{"client.go", "Timeout: " + ms("TimeoutMs") + " * time.Millisecond"},
-		{"client.go", "maxRetryAfter: " + ms("MaxRetryAfterMs") + " * time.Millisecond"},
-		{"client.go", "Window:      " + ms("BreakerWindowMs") + " * time.Millisecond"},
-		{"client.go", "MinRequests: " + ms("BreakerMinReqs")},
-		{"client.go", "FailPercent: " + ms("BreakerFailPct")},
-		{"client.go", "Cooldown:    " + ms("BreakerCooldown") + " * time.Millisecond"},
-		{"client.go", "time.Duration{" + ms("SingleBackoffMs") + " * time.Millisecond}"},
-		{"resilience.ts", "timeoutMs = " + ms("TimeoutMs")},
-		{"resilience.ts", "maxRetryAfterMs = " + ms("MaxRetryAfterMs")},
-		{"resilience.ts", "windowMs: " + ms("BreakerWindowMs")},
-		{"resilience.ts", "minRequests: " + ms("BreakerMinReqs")},
-		{"resilience.ts", "failPercent: " + ms("BreakerFailPct")},
-		{"resilience.ts", "cooldownMs: " + ms("BreakerCooldown")},
-		{"resilience.ts", "backoffs: () => [" + ms("SingleBackoffMs") + "]"},
-	} {
-		body, ok := rendered[c.file]
-		if !ok {
-			t.Fatalf("%s was not rendered; the test is looking in the wrong place", c.file)
+	for _, tmpl := range []string{"go_client.go.tmpl", "ts_resilience.ts.tmpl"} {
+		was, err := apiclient.RenderWith(tmpl, p, d)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(body, c.want) {
-			t.Errorf("%s does not contain %q: a template dropped its action, so the two languages can differ again",
-				c.file, c.want)
+		now, err := apiclient.RenderWith(tmpl, p, other)
+		if err != nil {
+			t.Fatal(err)
 		}
+		for _, n := range []int{
+			other.TimeoutMs, other.SingleBackoffMs, other.MaxRetryAfterMs,
+			other.BreakerWindowMs, other.BreakerMinReqs, other.BreakerFailPct,
+			other.BreakerCooldownMs, other.ExpSeedMs, other.ExpAttempts,
+			other.ExpJitterPct,
+		} {
+			s := strconv.Itoa(n)
+			if !strings.Contains(now, s) {
+				t.Errorf("%s does not follow the declaration: %s is missing when it is the declared value, so a literal is standing in for it",
+					tmpl, s)
+			}
+			if strings.Contains(was, s) {
+				t.Errorf("%s contains %s before it was declared; the test numbers collide with something already rendered", tmpl, s)
+			}
+		}
+	}
+}
+
+// The two wait forms are the same sentence, so a change to one has to
+// be a change to both.
+//
+// Adjacency in the declaration makes that easy to get right; it does
+// not make getting it wrong legible. Drifting GoWait to "WAITED %dms"
+// reports five Retry-After cases as client disagreements, pointing a
+// reader at the parsers rather than at the format string.
+func TestTheTwoWaitFormsAreTheSameSentence(t *testing.T) {
+	v := apiclient.Verdicts()
+	// What is left once each language's way of saying "the number"
+	// is taken out.
+	shape := func(s, verb string) string { return strings.Replace(s, verb, "", 1) }
+	if g, ts := shape(v.GoWait, "%d"), shape(v.TSWait, "${ms}"); g != ts {
+		t.Errorf("GoWait %q and TSWait %q say different things: %q against %q",
+			v.GoWait, v.TSWait, g, ts)
 	}
 }

@@ -47,7 +47,7 @@ type RetryPolicy interface {
 type SingleRetry struct{}
 
 func (SingleRetry) Backoffs() []time.Duration {
-	return []time.Duration{{"{"}}{{ (defaults).SingleBackoffMs }} * time.Millisecond}
+	return []time.Duration{{"{"}}{{ defaults.SingleBackoffMs }} * time.Millisecond}
 }
 func (SingleRetry) Retry(req *http.Request, resp *http.Response, err error) bool {
 	return retryable(req, resp, err)
@@ -59,12 +59,12 @@ func (SingleRetry) Retry(req *http.Request, resp *http.Response, err error) bool
 type ExponentialRetry struct{}
 
 func (ExponentialRetry) Backoffs() []time.Duration {
-	out := make([]time.Duration, 5)
-	next := 100 * time.Millisecond
+	out := make([]time.Duration, {{ defaults.ExpAttempts }})
+	next := {{ defaults.ExpSeedMs }} * time.Millisecond
 	for i := range out {
 		// Jitter, so a fleet of callers does not retry in lockstep and
 		// arrive as one synchronised wave.
-		out[i] = next + time.Duration((rand.Float64()*2-1)*0.25*float64(next))
+		out[i] = next + time.Duration((rand.Float64()*2-1)*{{ defaults.ExpJitterPct }}/100.0*float64(next))
 		next *= 2
 	}
 	return out
@@ -204,10 +204,10 @@ type BreakerPolicy struct {
 // dependency failing half of what it is asked is unwell.
 func DefaultBreakerPolicy() BreakerPolicy {
 	return BreakerPolicy{
-		Window:      {{ (defaults).BreakerWindowMs }} * time.Millisecond,
-		MinRequests: {{ (defaults).BreakerMinReqs }},
-		FailPercent: {{ (defaults).BreakerFailPct }},
-		Cooldown:    {{ (defaults).BreakerCooldown }} * time.Millisecond,
+		Window:      {{ defaults.BreakerWindowMs }} * time.Millisecond,
+		MinRequests: {{ defaults.BreakerMinReqs }},
+		FailPercent: {{ defaults.BreakerFailPct }},
+		Cooldown:    {{ defaults.BreakerCooldownMs }} * time.Millisecond,
 	}
 }
 
@@ -373,7 +373,7 @@ func (b *Breaker) record(o outcome) {
 type TransportOption func(*HTTPClient)
 
 // WithTimeout bounds ONE attempt; a retry gets its own. Default
-// {{ (defaults).TimeoutMs }}ms.
+// {{ defaults.TimeoutMs }}ms.
 func WithTimeout(d time.Duration) TransportOption {
 	return func(c *HTTPClient) { c.http.Timeout = d }
 }
@@ -442,9 +442,9 @@ var _ ht.Client = (*HTTPClient)(nil)
 // service being called, not on the caller who left it out.
 func NewHTTPClient(name string, opts ...TransportOption) *HTTPClient {
 	c := &HTTPClient{
-		http:          &http.Client{Timeout: {{ (defaults).TimeoutMs }} * time.Millisecond},
+		http:          &http.Client{Timeout: {{ defaults.TimeoutMs }} * time.Millisecond},
 		policy:        SingleRetry{},
-		maxRetryAfter: {{ (defaults).MaxRetryAfterMs }} * time.Millisecond,
+		maxRetryAfter: {{ defaults.MaxRetryAfterMs }} * time.Millisecond,
 		name:          name,
 	}
 	for _, o := range opts {

@@ -684,7 +684,7 @@ test('print the Retry-After verdicts', () => {
     const res = new Response('', { headers: { 'retry-after': input } })
     const { ms, tooLong } = retryAfterMs(res, 30_000)
     answers[input] =
-      tooLong ? '{{ (verdicts).Stop }}' : ms !== undefined ? `{{ (verdicts).TSWait }}` : '{{ (verdicts).Fallback }}'
+      tooLong ? '{{ verdicts.Stop }}' : ms !== undefined ? `{{ verdicts.TSWait }}` : '{{ verdicts.Fallback }}'
   }
   console.log(`PARITY ${JSON.stringify(answers)}`)
 })
