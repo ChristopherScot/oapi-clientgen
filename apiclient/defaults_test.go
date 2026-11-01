@@ -2,6 +2,7 @@ package apiclient_test
 
 import (
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,10 +30,9 @@ func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 	}
 
 	// Where each field is rendered, and how many times. Stated rather
-	// than discovered, because the figures also occur as ordinary
-	// numbers in these files - 5 appears thirteen times in the Go
-	// client - so counting occurrences cannot tell a rendered value
-	// from a coincidence.
+	// than discovered: these figures also occur as ordinary numbers in
+	// these files, so counting occurrences cannot tell a rendered
+	// value from a coincidence.
 	//
 	// A field absent from this map is caught below: the clients must
 	// render every field, so an entry nobody added fails there.
@@ -42,37 +42,40 @@ func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 			"go_client.go.tmpl": 2, "ts_resilience.ts.tmpl": 2,
 		},
 		"MaxRetryAfterMs": {
-			"go_client.go.tmpl": 1, "ts_resilience.ts.tmpl": 1,
+			// A code line and the doc comment above it, as TimeoutMs.
+			"go_client.go.tmpl": 2, "ts_resilience.ts.tmpl": 2,
 			// The recorders cap Retry-After themselves. A cap of their
 			// own would let the parity harness judge the clients by a
 			// figure the clients do not use.
 			"go_client_test.go.tmpl": 1, "ts_resilience_test.ts.tmpl": 1,
 		},
 	}
-	const clients = 2 // the first two templates below
-	templates := []string{
-		"go_client.go.tmpl", "ts_resilience.ts.tmpl",
-		"go_client_test.go.tmpl", "ts_resilience_test.ts.tmpl",
-	}
+	// Every field has to reach both clients. A recorder carries only
+	// what sites says it does, which is why the two are separate lists
+	// rather than one with a count of where it divides.
+	clients := []string{"go_client.go.tmpl", "ts_resilience.ts.tmpl"}
+	recorders := []string{"go_client_test.go.tmpl", "ts_resilience_test.ts.tmpl"}
 
 	base := apiclient.Defaults()
 	v := reflect.ValueOf(base)
 	for i := 0; i < v.NumField(); i++ {
 		name := v.Type().Field(i).Name
 		if v.Field(i).Kind() != reflect.Int {
+			t.Run(name, func(t *testing.T) {
+				t.Skipf("%s is a %s; this only knows how to move an int", name, v.Field(i).Kind())
+			})
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			// Odd and long, so it cannot be mistaken for an unrelated
-			// number already in the output. The check below enforces
-			// that rather than trusting it.
+			// Moved somewhere the output does not already mention,
+			// which the check below enforces rather than trusts.
 			moved := reflect.New(v.Type()).Elem()
 			moved.Set(v)
 			sentinel := v.Field(i).Int()*10 + 7
 			moved.Field(i).SetInt(sentinel)
 			s := strconv.Itoa(int(sentinel))
 
-			for n, tmpl := range templates {
+			for _, tmpl := range append(append([]string{}, clients...), recorders...) {
 				was, err := apiclient.RenderWith(tmpl, p, base)
 				if err != nil {
 					t.Fatal(err)
@@ -85,12 +88,9 @@ func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 					t.Fatalf("%s already contains %s, so it cannot stand in for %s here", tmpl, s, name)
 				}
 
-				// One by default for a client, because every field has
-				// to reach both; zero for a test template, which is
-				// only held to what sites says it carries.
-				want := 1
-				if n >= clients {
-					want = 0
+				want := 0
+				if slices.Contains(clients, tmpl) {
+					want = 1
 				}
 				if listed, ok := sites[name][tmpl]; ok {
 					want = listed

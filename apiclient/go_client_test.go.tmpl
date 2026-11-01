@@ -436,7 +436,7 @@ func TestLateFailureMovesTheCooldown(t *testing.T) {
 // TestExponentialClientRetries, which asserts the gap between
 // attempts rather than trusting the policy to be wired up.
 //
-// The window is wide because the backoff carries +/-25% jitter by
+// The window is wide because the backoff carries jitter by
 // design - a fleet retrying in lockstep arrives as one wave - so this
 // pins the doubling without pinning the jitter.
 func TestExponentialRetryActuallyBacksOff(t *testing.T) {

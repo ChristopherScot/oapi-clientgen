@@ -52,7 +52,7 @@ export interface ClientOptions {
   policy?: RetryPolicy
   /** Omit to disable circuit breaking. */
   breaker?: Breaker
-  /** Bounds Retry-After. Default 30000. */
+  /** Bounds Retry-After. Default {{ defaults.MaxRetryAfterMs }}. */
   maxRetryAfterMs?: number
   /** What actually goes to the network. Defaults to global fetch.
    *
@@ -131,7 +131,7 @@ export const singleRetry: RetryPolicy = {
   retry: retryable,
 }
 
-// Five jittered attempts, for a slow-but-not-broken dependency. Jitter
+// Several jittered attempts, for a slow-but-not-broken dependency. Jitter
 // so a fleet of callers does not retry in lockstep.
 export const exponentialRetry: RetryPolicy = {
   backoffs: () => {

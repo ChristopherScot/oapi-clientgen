@@ -19,7 +19,7 @@ import (
 //
 // ogen ships no retries, timeout or breaker. Its only extension point is
 // WithClient, so those live here - defaults chosen for effect on the
-// SYSTEM (one retry, not five: five can mean five times the traffic to
+// SYSTEM (one retry, not several: each one multiplies the traffic to
 // something already struggling).
 //
 //	c, err := api.New(url, "webapp")
@@ -43,7 +43,7 @@ type RetryPolicy interface {
 	Retry(req *http.Request, resp *http.Response, err error) bool
 }
 
-// SingleRetry retries once, a second later. The default.
+// SingleRetry retries once, after a short pause. The default.
 type SingleRetry struct{}
 
 func (SingleRetry) Backoffs() []time.Duration {
@@ -54,8 +54,8 @@ func (SingleRetry) Retry(req *http.Request, resp *http.Response, err error) bool
 }
 
 // ExponentialRetry backs off with jitter for a slow-but-not-broken
-// dependency. Reach for it deliberately: five attempts can still mean
-// five times the load.
+// dependency. Reach for it deliberately: each attempt is more load on
+// something already struggling.
 type ExponentialRetry struct{}
 
 func (ExponentialRetry) Backoffs() []time.Duration {
@@ -412,8 +412,9 @@ func withBreaker(b *Breaker) TransportOption {
 }
 
 // WithMaxRetryAfter caps how long a server's Retry-After can park this
-// client. Default 30s; past it the request fails rather than waiting,
-// since sleeping an hour inside a request looks like a hang.
+// client. Default {{ defaults.MaxRetryAfterMs }}ms; past it the request
+// fails rather than waiting, since sleeping an hour inside a request
+// looks like a hang.
 func WithMaxRetryAfter(d time.Duration) TransportOption {
 	return func(c *HTTPClient) { c.maxRetryAfter = d }
 }
