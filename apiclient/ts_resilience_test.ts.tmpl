@@ -479,7 +479,7 @@ test('an open circuit rejects without reaching the dependency', async () => {
   assert.equal(s.count, 0, 'the request reached a dependency behind an open circuit')
 })
 
-test('a success clears the failure run', () => {
+test('a success pulls the rate back under the threshold', () => {
   const b = trippingBreaker(30_000)
   b.allow(); b.record('unwell')
   b.allow(); b.record('unwell')
@@ -509,11 +509,6 @@ test('half-open releases exactly one probe', async () => {
 })
 
 test('a failed probe re-arms the cooldown', async () => {
-  // failedRequests is 2 and only one failure is banked, so the
-  // failure-run guard cannot be what re-arms the clock here - the
-  // probe is. With failedRequests of 1 both guards fire and the test
-  // passes whichever one is doing the work, which is a test that
-  // cannot fail for the reason it is named after.
   const b = trippingBreaker(50)
   b.allow(); b.record('unwell')
   b.allow(); b.record('unwell')
@@ -522,10 +517,8 @@ test('a failed probe re-arms the cooldown', async () => {
   await new Promise((r) => setTimeout(r, 60))
   assert.equal(b.allow(), true, 'the cooldown passed and no probe was released')
 
-  // The probe succeeds enough to clear the run but not to close the
-  // circuit - there is no such outcome, so use the one that proves
-  // nothing. A probe reporting `ignore` holds the circuit open and
-  // must spend a full cooldown doing it.
+  // A probe reporting `ignore` proves nothing, so it holds the
+  // circuit open and must spend a full cooldown doing it.
   b.record('ignore')
   assert.equal(b.allow(), false, 'the spent probe did not cost a fresh cooldown')
   await new Promise((r) => setTimeout(r, 60))

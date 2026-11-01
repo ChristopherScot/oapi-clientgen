@@ -582,6 +582,31 @@ func TestCancellationIsNotADependencyFailure(t *testing.T) {
 	}
 }
 
+// A permanently unimplemented route does not become implemented on
+// the next attempt, so retrying it only spends the budget.
+func TestPermanentProtocolErrorsAreNotRetried(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewHTTPClient("test").Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a 501 will not become a 200", attempts)
+	}
+}
+
 // 501 and 505 are permanent protocol answers, not outages. They do
 // not recover after a cooldown, so counting them would leave the
 // breaker flapping open forever against a service working as built.
@@ -771,6 +796,58 @@ func TestASuccessAloneDoesNotClearAFailingRate(t *testing.T) {
 	}
 }
 
+// A successful probe takes the window with it. Those failures are
+// what opened the circuit; left in place they are still a failing
+// rate, so the next request would re-open it against a dependency
+// that has just answered.
+func TestASuccessfulProbeClearsTheWindow(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if n.Add(1) <= 20 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := DefaultBreakerPolicy()
+	p.Cooldown = 20 * time.Millisecond
+	b := &Breaker{Policy: p}
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
+
+	do := func() error {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+
+	for i := 0; i < p.MinRequests; i++ {
+		do()
+	}
+	time.Sleep(p.Cooldown * 2)
+	if err := do(); err != nil {
+		t.Fatalf("the probe was refused or failed: %v", err)
+	}
+
+	// Two more, because a stale window does its damage one request
+	// late: the request after the probe is admitted on the probe's
+	// verdict and only then reads a rate still holding the twenty
+	// failures, which shuts the circuit on the one after it.
+	if err := do(); err != nil {
+		t.Fatalf("the request after the probe was refused: %v", err)
+	}
+	if err := do(); err != nil {
+		t.Errorf("the probe left its failures behind: %v", err)
+	}
+}
+
 // A failing rate re-opens a circuit that a probe had closed, rather
 // than needing the whole window to fill again.
 func TestAStillFailingDependencyReOpens(t *testing.T) {
@@ -794,6 +871,36 @@ func TestAStillFailingDependencyReOpens(t *testing.T) {
 	}
 	if b.allow() {
 		t.Error("a dependency failing every request left the circuit closed")
+	}
+}
+
+// Zero does not mean "open at no failures": a caller who sets no
+// window, or no minimum, has asked for no measurement. Each field
+// alone, because a sweep that dropped one of them from off() would
+// otherwise still pass on the others.
+//
+// Cooldown is set on every case so that an opened circuit stays shut
+// while this looks at it - at zero, allow() releases a probe and
+// answers true whether off() did anything or not.
+func TestAPolicyAskingForNothingDisablesBreaking(t *testing.T) {
+	full := DefaultBreakerPolicy()
+	for _, c := range []struct {
+		name   string
+		policy BreakerPolicy
+	}{
+		{"no window", BreakerPolicy{MinRequests: full.MinRequests, FailPercent: full.FailPercent, Cooldown: full.Cooldown}},
+		{"no minimum", BreakerPolicy{Window: full.Window, FailPercent: full.FailPercent, Cooldown: full.Cooldown}},
+		{"no percentage", BreakerPolicy{Window: full.Window, MinRequests: full.MinRequests, Cooldown: full.Cooldown}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := &Breaker{Policy: c.policy}
+			for i := 0; i < 50; i++ {
+				b.record(unwell)
+			}
+			if !b.allow() {
+				t.Error("a policy asking for no measurement opened the circuit")
+			}
+		})
 	}
 }
 
@@ -845,10 +952,8 @@ func TestAnIgnoredNonProbeDoesNotDelayRecovery(t *testing.T) {
 	}
 }
 
-// The two ignore paths at FailedRequests zero, which is where a
-// sweep is weakest: `failures >= FailedRequests` is vacuously true
-// there, so it stops discriminating and the probe is the only thing
-// left that decides whether the clock moves.
+// The two ignore paths: only the probe decides whether the clock
+// moves, because an ignored outcome is not a data point either way.
 func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
 	marker := time.Unix(1, 0)
 

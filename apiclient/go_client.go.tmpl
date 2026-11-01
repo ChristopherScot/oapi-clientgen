@@ -290,7 +290,7 @@ func (b *Breaker) rate(now time.Time) (pct int, enough bool) {
 }
 
 // record is the other half of allow. It takes the probe slot back if
-// this request held it, updates the failure run, and re-arms the
+// this request held it, adds it to the window, and re-arms the
 // cooldown when the circuit is open and this request did not prove
 // recovery.
 func (b *Breaker) record(o outcome) {
