@@ -76,6 +76,7 @@ func render(name string, p Params) (string, error) {
 		"header":      Header,
 		"parityCases": func() []string { return parityCases },
 		"defaults":    func() any { return defaults },
+		"verdicts":    func() any { return verdicts },
 	}).Parse(string(b))
 	if err != nil {
 		return "", fmt.Errorf("apiclient: parsing %s: %w", name, err)
@@ -157,6 +158,27 @@ func files(set []templateFile, p Params) ([]File, error) {
 		out = append(out, File{Path: f.path, Body: body})
 	}
 	return out, nil
+}
+
+// verdicts are the words a recorder prints for what its client made of
+// a Retry-After header, and the comparison reads back.
+//
+// Rendered into both test templates from here. Spelled independently
+// they were a wire format with no definition: a typo in one language
+// reads as every case diverging, and a drift in the WAIT form reads as
+// arithmetic disagreement, neither of which the harness can tell from
+// a real difference.
+var verdicts = struct {
+	Stop, Fallback string
+	// GoWait and TSWait are the same sentence in each language's own
+	// formatting: one Printf verb, one template literal. Kept beside
+	// each other so a change to the shape has to touch both.
+	GoWait, TSWait string
+}{
+	Stop:     "STOP",
+	Fallback: "FALLBACK",
+	GoWait:   "WAIT %dms",
+	TSWait:   "WAIT ${ms}ms",
 }
 
 // defaults are the numbers both languages are specified to share.
