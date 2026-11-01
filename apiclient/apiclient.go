@@ -73,7 +73,7 @@ func render(name string, p Params) (string, error) {
 
 // renderWith is render with the shared numbers supplied, so a test can
 // vary them and see whether the templates actually read them.
-func renderWith(name string, p Params, d sharedDefaults) (string, error) {
+func renderWith(name string, p Params, d SharedDefaults) (string, error) {
 	b, err := templates.ReadFile(name)
 	if err != nil {
 		return "", fmt.Errorf("apiclient: %w", err)
@@ -81,8 +81,8 @@ func renderWith(name string, p Params, d sharedDefaults) (string, error) {
 	t, err := template.New(name).Funcs(template.FuncMap{
 		"header":      Header,
 		"parityCases": func() []string { return parityCases },
-		"defaults":    func() sharedDefaults { return d },
-		"verdicts":    func() verdictWords { return verdictVocabulary },
+		"defaults":    func() SharedDefaults { return d },
+		"verdicts":    func() VerdictWords { return verdictVocabulary },
 	}).Parse(string(b))
 	if err != nil {
 		return "", fmt.Errorf("apiclient: parsing %s: %w", name, err)
@@ -172,7 +172,7 @@ func files(set []templateFile, p Params) ([]File, error) {
 // A wire format: the recorders print these and the comparison reads
 // them back, so a difference in spelling reads as every case of that
 // verdict diverging rather than as the typo it is.
-type verdictWords struct {
+type VerdictWords struct {
 	Stop, Fallback string
 	// GoWait and TSWait are the same sentence in each language's own
 	// formatting: one Printf verb, one template literal. Kept beside
@@ -180,7 +180,7 @@ type verdictWords struct {
 	GoWait, TSWait string
 }
 
-var verdictVocabulary = verdictWords{
+var verdictVocabulary = VerdictWords{
 	Stop:     "STOP",
 	Fallback: "FALLBACK",
 	GoWait:   "WAIT %dms",
@@ -195,7 +195,7 @@ var verdictVocabulary = verdictWords{
 //
 // Durations are milliseconds because that is the unit TypeScript has;
 // the Go template renders them back into time.Duration.
-type sharedDefaults struct {
+type SharedDefaults struct {
 	TimeoutMs       int
 	SingleBackoffMs int
 	ExpSeedMs       int
@@ -212,7 +212,7 @@ type sharedDefaults struct {
 	BreakerCooldownMs int
 }
 
-var defaults = sharedDefaults{
+var defaults = SharedDefaults{
 	TimeoutMs:         5000,
 	SingleBackoffMs:   1000,
 	ExpSeedMs:         100,

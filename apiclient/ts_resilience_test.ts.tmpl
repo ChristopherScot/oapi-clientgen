@@ -682,7 +682,7 @@ test('print the Retry-After verdicts', () => {
 {{ range parityCases }}    {{ printf "%q" . }},
 {{ end }}  ]) {
     const res = new Response('', { headers: { 'retry-after': input } })
-    const { ms, tooLong } = retryAfterMs(res, 30_000)
+    const { ms, tooLong } = retryAfterMs(res, {{ defaults.MaxRetryAfterMs }})
     answers[input] =
       tooLong ? '{{ verdicts.Stop }}' : ms !== undefined ? `{{ verdicts.TSWait }}` : '{{ verdicts.Fallback }}'
   }
