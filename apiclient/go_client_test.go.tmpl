@@ -39,19 +39,23 @@ func TestRetryIsBoundedAndBreakerOpens(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient("test", WithPolicy(NoRetry{}), WithBreaker(3, time.Minute))
+	// The default policy needs MinRequests before a rate means
+	// anything, so an everything-fails dependency is asked that many
+	// times and then no more.
+	p := DefaultBreakerPolicy()
+	c := NewHTTPClient("test", WithPolicy(NoRetry{}), WithBreakerPolicy(p))
 	var opened int
-	for i := 0; i < 5; i++ {
+	for i := 0; i < p.MinRequests+5; i++ {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
 		if _, err := c.Do(req); err == ErrCircuitOpen {
 			opened++
 		}
 	}
-	if hits != 3 {
-		t.Errorf("upstream saw %d requests, want 3 before the breaker opened", hits)
+	if hits != p.MinRequests {
+		t.Errorf("upstream saw %d requests, want %d before the breaker opened", hits, p.MinRequests)
 	}
-	if opened != 2 {
-		t.Errorf("%d calls rejected by an open circuit, want 2", opened)
+	if opened != 5 {
+		t.Errorf("%d calls rejected by an open circuit, want 5", opened)
 	}
 }
 
@@ -348,12 +352,25 @@ func TestBackoffStopsWhenTheCallerGivesUp(t *testing.T) {
 	}
 }
 
+// trippingBreaker opens on the first failed request, for tests about
+// what happens AFTER the circuit opens. MinRequests 1 and 100% say
+// "one failure and nothing else is enough", which keeps those tests
+// from depending on the default rate.
+func trippingBreaker(cooldown time.Duration) *Breaker {
+	return &Breaker{Policy: BreakerPolicy{
+		Window:      time.Hour,
+		MinRequests: 1,
+		FailPercent: 100,
+		Cooldown:    cooldown,
+	}}
+}
+
 // Half-open means ONE caller finds out whether the dependency is
 // back. Releasing everyone who waited out the cooldown aims the whole
 // blocked set at something that has just proved it is struggling -
 // the stampede the breaker exists to prevent.
 func TestHalfOpenReleasesOneProbe(t *testing.T) {
-	b := &Breaker{FailedRequests: 3, Cooldown: 10 * time.Millisecond}
+	b := trippingBreaker(10 * time.Millisecond)
 	for i := 0; i < 3; i++ {
 		b.record(unwell)
 	}
@@ -383,7 +400,7 @@ func TestHalfOpenReleasesOneProbe(t *testing.T) {
 // A failed probe means the dependency is still down, so the cooldown
 // starts again rather than letting the next caller straight through.
 func TestFailedProbeReArmsTheCooldown(t *testing.T) {
-	b := &Breaker{FailedRequests: 1, Cooldown: 10 * time.Millisecond}
+	b := trippingBreaker(10 * time.Millisecond)
 	b.record(unwell)
 	time.Sleep(20 * time.Millisecond)
 
@@ -401,7 +418,7 @@ func TestFailedProbeReArmsTheCooldown(t *testing.T) {
 // their failures without moving openedAt measures the cooldown from
 // the first trip, so it expires early.
 func TestLateFailureMovesTheCooldown(t *testing.T) {
-	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
+	b := trippingBreaker(time.Hour)
 	for i := 0; i < 3; i++ {
 		b.record(unwell)
 	}
@@ -500,7 +517,7 @@ func TestCancelledProbeDoesNotWedgeTheBreaker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{FailedRequests: 1, Cooldown: 10 * time.Millisecond}
+	b := trippingBreaker(10 * time.Millisecond)
 	c := NewHTTPClient("test", withBreaker(b))
 
 	// Trip it.
@@ -543,7 +560,7 @@ func TestCancellationIsNotADependencyFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+	b := trippingBreaker(time.Hour)
 	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 
 	for i := 0; i < 3; i++ {
@@ -565,6 +582,31 @@ func TestCancellationIsNotADependencyFailure(t *testing.T) {
 	}
 }
 
+// A permanently unimplemented route does not become implemented on
+// the next attempt, so retrying it only spends the budget.
+func TestPermanentProtocolErrorsAreNotRetried(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := NewHTTPClient("test").Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a 501 will not become a 200", attempts)
+	}
+}
+
 // 501 and 505 are permanent protocol answers, not outages. They do
 // not recover after a cooldown, so counting them would leave the
 // breaker flapping open forever against a service working as built.
@@ -574,7 +616,7 @@ func TestPermanentProtocolErrorsAreNotDependencyFailures(t *testing.T) {
 			w.WriteHeader(status)
 		}))
 
-		b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+		b := trippingBreaker(time.Hour)
 		c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 		for i := 0; i < 3; i++ {
 			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -601,7 +643,7 @@ func TestServerErrorsStillTripTheBreaker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+	b := trippingBreaker(time.Hour)
 	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 	for i := 0; i < 2; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -631,7 +673,7 @@ func TestAHungDependencyStillTripsTheBreaker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{FailedRequests: 2, Cooldown: time.Hour}
+	b := trippingBreaker(time.Hour)
 	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}), WithTimeout(20*time.Millisecond))
 	for i := 0; i < 3; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -663,7 +705,7 @@ func TestAnIgnoredOutcomeDoesNotEraseRealFailures(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
+	b := trippingBreaker(time.Hour)
 	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 	for i := 0; i < 20; i++ {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -681,12 +723,14 @@ func TestAnIgnoredOutcomeDoesNotEraseRealFailures(t *testing.T) {
 	}
 }
 
-// A success still clears the run: that is what tells the breaker the
-// service came back.
-func TestASuccessClearsTheFailureRun(t *testing.T) {
+// A dependency that comes back closes the circuit, on the evidence of
+// the probe that found it back. The window is cleared with it: those
+// failures are what opened the circuit, and holding them would re-open
+// it on the next read against a dependency that has just answered.
+func TestRecoveryClosesTheCircuit(t *testing.T) {
 	var n atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if n.Add(1) <= 2 {
+		if n.Add(1) <= 20 {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -694,9 +738,14 @@ func TestASuccessClearsTheFailureRun(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &Breaker{FailedRequests: 3, Cooldown: time.Hour}
+	// Long enough to assert on an open circuit, short enough to wait
+	// out below.
+	p := DefaultBreakerPolicy()
+	p.Cooldown = 20 * time.Millisecond
+	b := &Breaker{Policy: p}
 	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
-	for i := 0; i < 4; i++ {
+
+	do := func() error {
 		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -705,70 +754,156 @@ func TestASuccessClearsTheFailureRun(t *testing.T) {
 		if err == nil {
 			resp.Body.Close()
 		}
+		return err
 	}
 
-	if !b.allow() {
-		t.Error("two 500s followed by successes should have cleared the run")
+	for i := 0; i < p.MinRequests; i++ {
+		do()
+	}
+	if err := do(); err != ErrCircuitOpen {
+		t.Fatalf("a dependency failing every request stayed closed: %v", err)
+	}
+
+	// The probe the cooldown releases finds the dependency answering.
+	time.Sleep(p.Cooldown * 2)
+	if err := do(); err != nil {
+		t.Fatalf("the probe was refused or failed: %v", err)
+	}
+	if err := do(); err != nil {
+		t.Errorf("a successful probe did not close the circuit: %v", err)
 	}
 }
 
-// A permanently unimplemented route does not become implemented on
-// the next attempt, so retrying it only spends the budget.
-func TestPermanentProtocolErrorsAreNotRetried(t *testing.T) {
-	var attempts int
+// The bug a consecutive count had: one success in three kept the
+// circuit closed against a dependency failing two requests in three.
+// A rate cannot be cleared by a single success.
+func TestASuccessAloneDoesNotClearAFailingRate(t *testing.T) {
+	b := &Breaker{Policy: BreakerPolicy{
+		Window:      time.Hour,
+		MinRequests: 20,
+		FailPercent: 50,
+		Cooldown:    30 * time.Second,
+	}}
+	for i := 0; i < 30; i++ {
+		if i%3 == 2 {
+			b.record(healthy)
+			continue
+		}
+		b.record(unwell)
+	}
+	if b.allow() {
+		t.Error("two failures in three left the circuit closed")
+	}
+}
+
+// A successful probe takes the window with it. Those failures are
+// what opened the circuit; left in place they are still a failing
+// rate, so the next request would re-open it against a dependency
+// that has just answered.
+func TestASuccessfulProbeClearsTheWindow(t *testing.T) {
+	var n atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		w.WriteHeader(http.StatusNotImplemented)
+		if n.Add(1) <= 20 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := NewHTTPClient("test").Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
+	p := DefaultBreakerPolicy()
+	p.Cooldown = 20 * time.Millisecond
+	b := &Breaker{Policy: p}
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
 
-	if attempts != 1 {
-		t.Errorf("attempts = %d, want 1: a 501 will not become a 200", attempts)
+	do := func() error {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+
+	for i := 0; i < p.MinRequests; i++ {
+		do()
+	}
+	time.Sleep(p.Cooldown * 2)
+	if err := do(); err != nil {
+		t.Fatalf("the probe was refused or failed: %v", err)
+	}
+
+	// Two more, because a stale window does its damage one request
+	// late: the request after the probe is admitted on the probe's
+	// verdict and only then reads a rate still holding the twenty
+	// failures, which shuts the circuit on the one after it.
+	if err := do(); err != nil {
+		t.Fatalf("the request after the probe was refused: %v", err)
+	}
+	if err := do(); err != nil {
+		t.Errorf("the probe left its failures behind: %v", err)
 	}
 }
 
-// An inconclusive probe still spends the slot. Without re-arming,
-// the cooldown has already elapsed when the probe reports back, so
-// the next caller is handed another probe immediately - and an open
-// circuit stops throttling precisely when the callers most likely to
-// cancel are the ones waiting on it.
-func TestAnIgnoredProbeStillCostsACooldown(t *testing.T) {
-	b := &Breaker{FailedRequests: 1, Cooldown: 50 * time.Millisecond}
-	b.record(unwell)
-	time.Sleep(60 * time.Millisecond)
+// A failing rate re-opens a circuit that a probe had closed, rather
+// than needing the whole window to fill again.
+func TestAStillFailingDependencyReOpens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
 
-	if !b.allow() {
-		t.Fatal("the probe should have been released after the cooldown")
+	p := DefaultBreakerPolicy()
+	p.Cooldown = time.Hour
+	b := &Breaker{Policy: p}
+	c := NewHTTPClient("test", withBreaker(b), WithPolicy(NoRetry{}))
+	for i := 0; i < p.MinRequests*2; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp, err := c.Do(req); err == nil {
+			resp.Body.Close()
+		}
 	}
-	b.record(ignore) // it told us nothing
-
 	if b.allow() {
-		t.Error("a second probe was released immediately; the open circuit is not throttling")
+		t.Error("a dependency failing every request left the circuit closed")
 	}
 }
 
-// A Breaker nobody configured must not refuse traffic.
+// Zero does not mean "open at no failures": a caller who sets no
+// window, or no minimum, has asked for no measurement. Each field
+// alone, because a sweep that dropped one of them from off() would
+// otherwise still pass on the others.
 //
-// It does not get there the obvious way. FailedRequests zero makes
-// the first check 0 < 0, which is false, so EVERY call falls through
-// to the probe gate - and passes it, because the zero openedAt makes
-// time.Since enormous. So a zero-valued Breaker is not disabled, it
-// hands out an unlimited supply of half-open probes, which happens
-// to look identical from outside.
-//
-// Pinned because the obvious hardening - requiring openedAt to be
-// set before the probe gate opens - would turn that into a client
-// that refuses its own first request.
+// Cooldown is set on every case so that an opened circuit stays shut
+// while this looks at it - at zero, allow() releases a probe and
+// answers true whether off() did anything or not.
+func TestAPolicyAskingForNothingDisablesBreaking(t *testing.T) {
+	full := DefaultBreakerPolicy()
+	for _, c := range []struct {
+		name   string
+		policy BreakerPolicy
+	}{
+		{"no window", BreakerPolicy{MinRequests: full.MinRequests, FailPercent: full.FailPercent, Cooldown: full.Cooldown}},
+		{"no minimum", BreakerPolicy{Window: full.Window, FailPercent: full.FailPercent, Cooldown: full.Cooldown}},
+		{"no percentage", BreakerPolicy{Window: full.Window, MinRequests: full.MinRequests, Cooldown: full.Cooldown}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := &Breaker{Policy: c.policy}
+			for i := 0; i < 50; i++ {
+				b.record(unwell)
+			}
+			if !b.allow() {
+				t.Error("a policy asking for no measurement opened the circuit")
+			}
+		})
+	}
+}
+
 func TestAZeroValuedBreakerDisablesItself(t *testing.T) {
 	if !(&Breaker{}).allow() {
 		t.Error("a fresh zero-valued Breaker refused the first request")
@@ -804,7 +939,7 @@ func TestAZeroValuedBreakerDisablesItself(t *testing.T) {
 // those says nothing about the dependency and must not push its
 // recovery further away.
 func TestAnIgnoredNonProbeDoesNotDelayRecovery(t *testing.T) {
-	b := &Breaker{FailedRequests: 1, Cooldown: 50 * time.Millisecond}
+	b := trippingBreaker(50 * time.Millisecond)
 	b.record(unwell)
 	time.Sleep(30 * time.Millisecond)
 
@@ -817,14 +952,13 @@ func TestAnIgnoredNonProbeDoesNotDelayRecovery(t *testing.T) {
 	}
 }
 
-// The two ignore paths at FailedRequests zero, which is where a
-// sweep is weakest: `failures >= FailedRequests` is vacuously true
-// there, so it stops discriminating and the probe is the only thing
-// left that decides whether the clock moves.
+// The two ignore paths: only the probe decides whether the clock
+// moves, because an ignored outcome is not a data point either way.
 func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
 	marker := time.Unix(1, 0)
 
-	held := &Breaker{FailedRequests: 0, Cooldown: time.Hour, probing: true, openedAt: marker}
+	held := trippingBreaker(time.Hour)
+	held.probing, held.openedAt = true, marker
 	held.record(ignore)
 	if held.probing {
 		t.Error("the probe was not handed back")
@@ -833,7 +967,8 @@ func TestIgnoreArmsTheClockOnlyForAProbe(t *testing.T) {
 		t.Error("an ignored probe must spend its slot and arm the clock")
 	}
 
-	none := &Breaker{FailedRequests: 0, Cooldown: time.Hour, openedAt: marker}
+	none := trippingBreaker(time.Hour)
+	none.openedAt = marker
 	none.record(ignore)
 	if !none.openedAt.Equal(marker) {
 		t.Error("an ignored non-probe armed the clock and delayed recovery")

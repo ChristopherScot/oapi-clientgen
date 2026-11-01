@@ -4,8 +4,8 @@
 // client in api/client.go - 5s timeout, one retry - because both
 // clients failing the same way is the point.
 //
-// Breaking is off in both until asked for: `breaker: new Breaker(5,
-// 30_000)` here, `WithBreaker(5, 30*time.Second)` in Go.
+// Breaking is off in both until asked for: `breaker: new Breaker()`
+// here, `WithBreaker()` in Go.
 //
 //   import { createClient, listThings } from '{{ .ImportPath }}'
 //   const client = createClient({ baseUrl: 'https://{{ .Name }}', name: 'my-service' })
@@ -202,76 +202,159 @@ export class CircuitOpenError extends Error {
   }
 }
 
+/** When a dependency has failed enough to stop asking.
+ *
+ *  A rate over a window rather than a run of consecutive failures: a
+ *  dependency answering two requests in three with a 500 is one to
+ *  shed load from, and under a consecutive count the one success in
+ *  three clears the run forever. Measured per REQUEST, so one that
+ *  exhausted its retries counts once. */
+export interface BreakerPolicy {
+  /** How far back the rate is measured. */
+  windowMs: number
+  /** How many requests the window needs before a rate means
+   *  anything. Below it the circuit stays closed: two failures out of
+   *  two is 100% and says almost nothing. */
+  minRequests: number
+  /** The share of failed requests that opens the circuit, as a whole
+   *  number out of 100. */
+  failPercent: number
+  /** How long an open circuit waits before letting one request
+   *  through to find out whether the dependency is back. */
+  cooldownMs: number
+}
+
+/** What `new Breaker()` uses when given nothing.
+ *
+ *  50% where wag's hystrix default is 90%: that figure suits a window
+ *  holding thousands of requests, where a service at 89% errors is
+ *  still serving hundreds. At the request rates these clients see, a
+ *  dependency failing half of what it is asked is unwell. */
+export const defaultBreakerPolicy: BreakerPolicy = {
+  windowMs: 10_000,
+  minRequests: 20,
+  failPercent: 50,
+  cooldownMs: 30_000,
+}
+
+/** One request's contribution to the window. */
+interface Attempt {
+  at: number
+  failed: boolean
+}
+
 export class Breaker {
-  #failures = 0
+  #outcomes: Attempt[] = []
+  #open = false
   #probing = false
   #openedAt = 0
-  readonly failedRequests: number
-  readonly cooldownMs: number
+  readonly policy: BreakerPolicy
 
-  /** failedRequests is how many consecutive failed REQUESTS open the
-   *  circuit. A request that exhausted its retries counts once. */
-  constructor(failedRequests = 5, cooldownMs = 30_000) {
-    this.failedRequests = failedRequests
-    this.cooldownMs = cooldownMs
+  /** Partial policies are filled from defaultBreakerPolicy, so a
+   *  field added later keeps its default rather than becoming
+   *  undefined. */
+  constructor(policy: Partial<BreakerPolicy> = {}) {
+    this.policy = { ...defaultBreakerPolicy, ...policy }
+  }
+
+  /** Whether this policy asks for nothing. A zero window or
+   *  minRequests describes no measurement, and a zero failPercent
+   *  would otherwise read as "open at no failures at all" - the
+   *  opposite of what leaving it unset means. */
+  #off(): boolean {
+    const p = this.policy
+    return p.windowMs <= 0 || p.minRequests <= 0 || p.failPercent <= 0
   }
 
   allow(): boolean {
-    if (this.#failures < this.failedRequests) return true
+    if (this.#off()) return true
+    if (!this.#open) return true
     // Open. One caller past the cooldown gets through to find out
     // whether the dependency is back; everyone else waits for its
-    // verdict rather than joining it. Zeroing the count here instead
-    // would release every waiting caller at something that has just
-    // proved it is struggling.
-    if (!this.#probing && Date.now() - this.#openedAt > this.cooldownMs) {
+    // verdict rather than joining it.
+    if (!this.#probing && Date.now() - this.#openedAt > this.policy.cooldownMs) {
       this.#probing = true
       return true
     }
     return false
   }
-  /** Takes the probe slot back if this request held it, updates the
-   *  failure run, and re-arms the cooldown when the circuit is open
-   *  and this request did not prove recovery. */
+
+  /** Trims the window and reports the failure percentage in it, and
+   *  whether there were enough requests for that to mean anything. */
+  #rate(now: number): { pct: number; enough: boolean } {
+    const cut = now - this.policy.windowMs
+    let keep = 0
+    while (keep < this.#outcomes.length && this.#outcomes[keep]!.at < cut) keep++
+    this.#outcomes = this.#outcomes.slice(keep)
+
+    if (this.#outcomes.length < this.policy.minRequests) return { pct: 0, enough: false }
+    const failed = this.#outcomes.filter((a) => a.failed).length
+    return { pct: Math.floor((failed * 100) / this.#outcomes.length), enough: true }
+  }
+
+  /** Takes the probe slot back if this request held it, adds this
+   *  request to the window, and reads the rate. */
   record(o: Outcome): void {
+    if (this.#off()) return
     const probe = this.#probing
     this.#probing = false
 
-    // Each outcome declares what it PROVED, and the clock below
-    // reads those rather than the outcome's name. An outcome added
-    // later has to say so to count as recovery or as a failure, and
-    // silence gets the conservative answer on both.
+    // Each outcome declares what it PROVED, and the window below
+    // takes only those. An outcome added later has to say so to count
+    // either way, and silence keeps it out of the rate rather than
+    // landing in it as a success.
     let recovered = false
-    let extended = false
+    let counted = false
     switch (o) {
       case 'healthy':
-        this.#failures = 0
         recovered = true
+        counted = true
         break
       case 'unwell':
-        this.#failures++
-        extended = true
+        counted = true
         break
       case 'ignore':
-        // Tells us nothing, so the run stands.
+        // Says nothing about the dependency, so it is not a data
+        // point: a 501 on one route or a caller that gave up should
+        // neither open the circuit nor argue against opening it.
         break
     }
+
+    const now = Date.now()
+    if (counted) this.#outcomes.push({ at: now, failed: !recovered })
 
     // A probe that did not prove recovery spends its slot and costs
     // a full cooldown, or an open circuit hands a fresh probe to
     // every caller the moment the first reports back.
     if (probe && !recovered) {
-      this.#openedAt = Date.now()
+      this.#openedAt = now
+      return
+    }
+    // The probe found it answering. The failures that opened the
+    // circuit are what it was judged on, so they go with it - held,
+    // they would re-open it on the next read.
+    if (probe && recovered) {
+      this.#open = false
+      this.#outcomes = []
       return
     }
 
-    // A failure moves the clock so the cooldown is measured from the
-    // last one rather than the first.
-    //
-    // >= not ===: requests already in flight when the breaker
-    // tripped land afterwards, and with === their failures would not
-    // move it, so the cooldown would expire early.
-    if (extended && this.#failures >= this.failedRequests) {
-      this.#openedAt = Date.now()
+    // Only a request that said something can move the circuit. An
+    // ignored one adds no data point, so re-reading the rate for it
+    // would re-arm the cooldown on evidence that has not changed -
+    // pushing recovery further away every time a caller cancels.
+    if (!counted) return
+
+    const { pct, enough } = this.#rate(now)
+    if (!enough) return
+    if (pct >= this.policy.failPercent) {
+      // Re-armed on every failing read, not only the first, so the
+      // cooldown is measured from the last failure rather than the
+      // one that opened the circuit.
+      this.#open = true
+      this.#openedAt = now
+    } else {
+      this.#open = false
     }
   }
 }
