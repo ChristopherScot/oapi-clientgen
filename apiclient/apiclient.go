@@ -75,6 +75,7 @@ func render(name string, p Params) (string, error) {
 	t, err := template.New(name).Funcs(template.FuncMap{
 		"header":      Header,
 		"parityCases": func() []string { return parityCases },
+		"defaults":    func() any { return defaults },
 	}).Parse(string(b))
 	if err != nil {
 		return "", fmt.Errorf("apiclient: parsing %s: %w", name, err)
@@ -156,6 +157,34 @@ func files(set []templateFile, p Params) ([]File, error) {
 		out = append(out, File{Path: f.path, Body: body})
 	}
 	return out, nil
+}
+
+// defaults are the numbers both languages are specified to share.
+//
+// Rendered into each template from here, so a change lands in both or
+// in neither. Written twice as literals they drifted silently: nothing
+// compares 5s against 5000, and a client whose timeout moved in one
+// language only is a difference nobody would see until a service
+// behaved differently depending on what it was written in.
+//
+// Durations are milliseconds because that is the unit TypeScript has;
+// the Go template renders them back into time.Duration.
+var defaults = struct {
+	TimeoutMs       int
+	SingleBackoffMs int
+	MaxRetryAfterMs int
+	BreakerWindowMs int
+	BreakerMinReqs  int
+	BreakerFailPct  int
+	BreakerCooldown int
+}{
+	TimeoutMs:       5000,
+	SingleBackoffMs: 1000,
+	MaxRetryAfterMs: 30000,
+	BreakerWindowMs: 10000,
+	BreakerMinReqs:  20,
+	BreakerFailPct:  50,
+	BreakerCooldown: 30000,
 }
 
 // parityCases are the Retry-After headers every generated client must

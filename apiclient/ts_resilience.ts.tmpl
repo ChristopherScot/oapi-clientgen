@@ -46,7 +46,7 @@ export interface ClientOptions {
    *  because the cost of omitting it falls on whoever operates the
    *  service being called. */
   name: string
-  /** Bounds a single attempt. Default 5000; a retry gets its own. */
+  /** Bounds a single attempt. Default {{ (defaults).TimeoutMs }}; a retry gets its own. */
   timeoutMs?: number
   /** Default singleRetry. */
   policy?: RetryPolicy
@@ -127,7 +127,7 @@ function retryable(req: Request, res: Response | undefined, err: unknown): boole
 
 // One retry, a second later. The default.
 export const singleRetry: RetryPolicy = {
-  backoffs: () => [1000],
+  backoffs: () => [{{ (defaults).SingleBackoffMs }}],
   retry: retryable,
 }
 
@@ -231,10 +231,10 @@ export interface BreakerPolicy {
  *  still serving hundreds. At the request rates these clients see, a
  *  dependency failing half of what it is asked is unwell. */
 export const defaultBreakerPolicy: BreakerPolicy = {
-  windowMs: 10_000,
-  minRequests: 20,
-  failPercent: 50,
-  cooldownMs: 30_000,
+  windowMs: {{ (defaults).BreakerWindowMs }},
+  minRequests: {{ (defaults).BreakerMinReqs }},
+  failPercent: {{ (defaults).BreakerFailPct }},
+  cooldownMs: {{ (defaults).BreakerCooldown }},
 }
 
 /** One request's contribution to the window. */
@@ -374,10 +374,10 @@ export class Breaker {
 export function createResilientFetch({
   // CALLER's own service name, sent as Client-Name.
   name,
-  timeoutMs = 5000,
+  timeoutMs = {{ (defaults).TimeoutMs }},
   policy = singleRetry,
   breaker,
-  maxRetryAfterMs = 30_000,
+  maxRetryAfterMs = {{ (defaults).MaxRetryAfterMs }},
   fetch: send,
 }: Omit<ClientOptions, 'baseUrl'>) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -46,7 +46,9 @@ type RetryPolicy interface {
 // SingleRetry retries once, a second later. The default.
 type SingleRetry struct{}
 
-func (SingleRetry) Backoffs() []time.Duration { return []time.Duration{time.Second} }
+func (SingleRetry) Backoffs() []time.Duration {
+	return []time.Duration{{"{"}}{{ (defaults).SingleBackoffMs }} * time.Millisecond}
+}
 func (SingleRetry) Retry(req *http.Request, resp *http.Response, err error) bool {
 	return retryable(req, resp, err)
 }
@@ -202,10 +204,10 @@ type BreakerPolicy struct {
 // dependency failing half of what it is asked is unwell.
 func DefaultBreakerPolicy() BreakerPolicy {
 	return BreakerPolicy{
-		Window:      10 * time.Second,
-		MinRequests: 20,
-		FailPercent: 50,
-		Cooldown:    30 * time.Second,
+		Window:      {{ (defaults).BreakerWindowMs }} * time.Millisecond,
+		MinRequests: {{ (defaults).BreakerMinReqs }},
+		FailPercent: {{ (defaults).BreakerFailPct }},
+		Cooldown:    {{ (defaults).BreakerCooldown }} * time.Millisecond,
 	}
 }
 
@@ -370,7 +372,8 @@ func (b *Breaker) record(o outcome) {
 // Not Option or ClientOption: ogen generates both into this package.
 type TransportOption func(*HTTPClient)
 
-// WithTimeout bounds ONE attempt; a retry gets its own. Default 5s.
+// WithTimeout bounds ONE attempt; a retry gets its own. Default
+// {{ (defaults).TimeoutMs }}ms.
 func WithTimeout(d time.Duration) TransportOption {
 	return func(c *HTTPClient) { c.http.Timeout = d }
 }
@@ -439,9 +442,9 @@ var _ ht.Client = (*HTTPClient)(nil)
 // service being called, not on the caller who left it out.
 func NewHTTPClient(name string, opts ...TransportOption) *HTTPClient {
 	c := &HTTPClient{
-		http:          &http.Client{Timeout: 5 * time.Second},
+		http:          &http.Client{Timeout: {{ (defaults).TimeoutMs }} * time.Millisecond},
 		policy:        SingleRetry{},
-		maxRetryAfter: 30 * time.Second,
+		maxRetryAfter: {{ (defaults).MaxRetryAfterMs }} * time.Millisecond,
 		name:          name,
 	}
 	for _, o := range opts {

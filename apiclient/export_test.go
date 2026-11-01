@@ -10,3 +10,17 @@ import "slices"
 // A copy, like Retired, so a caller cannot change which cases the
 // suites are rendered.
 func ParityCases() []string { return slices.Clone(parityCases) }
+
+// Defaults is a copy of the numbers both templates render, for a test
+// that checks they reached both.
+func Defaults() map[string]int {
+	return map[string]int{
+		"TimeoutMs":       defaults.TimeoutMs,
+		"SingleBackoffMs": defaults.SingleBackoffMs,
+		"MaxRetryAfterMs": defaults.MaxRetryAfterMs,
+		"BreakerWindowMs": defaults.BreakerWindowMs,
+		"BreakerMinReqs":  defaults.BreakerMinReqs,
+		"BreakerFailPct":  defaults.BreakerFailPct,
+		"BreakerCooldown": defaults.BreakerCooldown,
+	}
+}
