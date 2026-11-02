@@ -1,7 +1,7 @@
 /* eslint-disable */
 {{ header `//` }}// Resilience for the {{ .Name }} client: timeout, retry, circuit
 // breaker and the identifying headers. The defaults match the Go
-// client in api/client.go - 5s timeout, one retry - because both
+// client in api/client.go, because both
 // clients failing the same way is the point.
 //
 // Breaking is off in both until asked for: `breaker: new Breaker()`
@@ -46,13 +46,13 @@ export interface ClientOptions {
    *  because the cost of omitting it falls on whoever operates the
    *  service being called. */
   name: string
-  /** Bounds a single attempt. Default {{ defaults.TimeoutMs }}; a retry gets its own. */
+  /** Bounds a single attempt; a retry gets its own. */
   timeoutMs?: number
   /** Default singleRetry. */
   policy?: RetryPolicy
   /** Omit to disable circuit breaking. */
   breaker?: Breaker
-  /** Bounds Retry-After. Default {{ defaults.MaxRetryAfterMs }}. */
+  /** Bounds how long a server can park this client. */
   maxRetryAfterMs?: number
   /** What actually goes to the network. Defaults to global fetch.
    *
@@ -125,7 +125,7 @@ function retryable(req: Request, res: Response | undefined, err: unknown): boole
   return res.status === 429 || res.status >= 500
 }
 
-// One retry, a second later. The default.
+// One retry, after a short pause. The default.
 export const singleRetry: RetryPolicy = {
   backoffs: () => [{{ defaults.SingleBackoffMs }}],
   retry: retryable,

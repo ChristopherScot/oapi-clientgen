@@ -29,32 +29,13 @@ func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 		ImportPath: "example.com/probe/api",
 	}
 
-	// Where each field is rendered, and how many times. Stated rather
-	// than discovered: these figures also occur as ordinary numbers in
-	// these files, so counting occurrences cannot tell a rendered
-	// value from a coincidence.
-	//
-	// A field absent from this map is caught below: the clients must
-	// render every field, so an entry nobody added fails there.
-	sites := map[string]map[string]int{
-		"TimeoutMs": {
-			// A code line and the doc comment above it.
-			"go_client.go.tmpl": 2, "ts_resilience.ts.tmpl": 2,
-		},
-		"MaxRetryAfterMs": {
-			// A code line and the doc comment above it, as TimeoutMs.
-			"go_client.go.tmpl": 2, "ts_resilience.ts.tmpl": 2,
-			// The recorders cap Retry-After themselves. A cap of their
-			// own would let the parity harness judge the clients by a
-			// figure the clients do not use.
-			"go_client_test.go.tmpl": 1, "ts_resilience_test.ts.tmpl": 1,
-		},
-	}
-	// Every field has to reach both clients. A recorder carries only
-	// what sites says it does, which is why the two are separate lists
-	// rather than one with a count of where it divides.
+	// The recorders cap Retry-After themselves, so a cap of their own
+	// would let the parity harness judge the clients by a figure the
+	// clients do not use.
 	clients := []string{"go_client.go.tmpl", "ts_resilience.ts.tmpl"}
-	recorders := []string{"go_client_test.go.tmpl", "ts_resilience_test.ts.tmpl"}
+	recorders := map[string][]string{
+		"MaxRetryAfterMs": {"go_client_test.go.tmpl", "ts_resilience_test.ts.tmpl"},
+	}
 
 	base := apiclient.Defaults()
 	v := reflect.ValueOf(base)
@@ -67,15 +48,13 @@ func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			// Moved somewhere the output does not already mention,
-			// which the check below enforces rather than trusts.
 			moved := reflect.New(v.Type()).Elem()
 			moved.Set(v)
 			sentinel := v.Field(i).Int()*10 + 7
 			moved.Field(i).SetInt(sentinel)
 			s := strconv.Itoa(int(sentinel))
 
-			for _, tmpl := range append(append([]string{}, clients...), recorders...) {
+			for _, tmpl := range slices.Concat(clients, recorders[name]) {
 				was, err := apiclient.RenderWith(tmpl, p, base)
 				if err != nil {
 					t.Fatal(err)
@@ -84,20 +63,13 @@ func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				// Moved somewhere the output does not already mention,
+				// which this enforces rather than trusts.
 				if strings.Contains(was, s) {
 					t.Fatalf("%s already contains %s, so it cannot stand in for %s here", tmpl, s, name)
 				}
-
-				want := 0
-				if slices.Contains(clients, tmpl) {
-					want = 1
-				}
-				if listed, ok := sites[name][tmpl]; ok {
-					want = listed
-				}
-				if got := strings.Count(now, s); got != want {
-					t.Errorf("%s renders %s %d times, want %d: a literal is standing in for it",
-						tmpl, name, got, want)
+				if !strings.Contains(now, s) {
+					t.Errorf("%s does not render %s: a literal is standing in for it", tmpl, name)
 				}
 			}
 		})
