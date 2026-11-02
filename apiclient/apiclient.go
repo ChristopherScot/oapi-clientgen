@@ -256,9 +256,10 @@ var defaults = SharedDefaults{
 // templates; one list of inputs catches the two drifting apart rather
 // than keeping them together.
 //
-// Retry-After is the only rule compared this way. Which statuses are
-// retryable, permanent, or unwell is written out separately in each
-// template and nothing here checks that the two still agree.
+// Retry-After is the only rule compared this way. Each template
+// writes out its own retryable and unwell boundaries, and no test
+// compares those across languages; 501 and 505 are the exception,
+// asserted in both suites.
 var parityCases = []string{
 	"2", "30", "31", "3600", "0",
 	"+5", "-0", "-5", "-1",
