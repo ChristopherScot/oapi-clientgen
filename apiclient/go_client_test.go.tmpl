@@ -436,7 +436,7 @@ func TestLateFailureMovesTheCooldown(t *testing.T) {
 // TestExponentialClientRetries, which asserts the gap between
 // attempts rather than trusting the policy to be wired up.
 //
-// The window is wide because the backoff carries +/-25% jitter by
+// The window is wide because the backoff carries jitter by
 // design - a fleet retrying in lockstep arrives as one wave - so this
 // pins the doubling without pinning the jitter.
 func TestExponentialRetryActuallyBacksOff(t *testing.T) {
@@ -992,14 +992,14 @@ func TestPrintRetryAfterVerdicts(t *testing.T) {
 {{ range parityCases }}		{{ printf "%q" . }},
 {{ end }}	} {
 		resp := &http.Response{Header: http.Header{"Retry-After": []string{in}}}
-		wait, ok, tooLong := retryAfter(resp, 30*time.Second)
+		wait, ok, tooLong := retryAfter(resp, {{ defaults.MaxRetryAfterMs }}*time.Millisecond)
 		switch {
 		case tooLong:
-			answers[in] = "STOP"
+			answers[in] = "{{ verdicts.Stop }}"
 		case ok:
-			answers[in] = fmt.Sprintf("WAIT %dms", wait.Milliseconds())
+			answers[in] = fmt.Sprintf("{{ verdicts.GoWait }}", wait.Milliseconds())
 		default:
-			answers[in] = "FALLBACK"
+			answers[in] = "{{ verdicts.Fallback }}"
 		}
 	}
 	// Checked rather than discarded, though a map of strings has

@@ -10,3 +10,16 @@ import "slices"
 // A copy, like Retired, so a caller cannot change which cases the
 // suites are rendered.
 func ParityCases() []string { return slices.Clone(parityCases) }
+
+// Defaults is the numbers both templates render, for a test that
+// checks they reached both.
+func Defaults() SharedDefaults { return defaults }
+
+// RenderWith renders one template with the shared numbers supplied, so
+// a test can vary them and see whether the templates read them.
+func RenderWith(name string, p Params, d SharedDefaults) (string, error) {
+	return renderWith(name, p, d)
+}
+
+// Verdicts is the vocabulary both recorders render.
+func Verdicts() VerdictWords { return verdictVocabulary }

@@ -19,7 +19,10 @@ import (
 // Asserted here rather than left to the comment that says so, because
 // a date a few seconds out looks like an ordinary case to add.
 func TestNoDateCaseFallsInsideTheCap(t *testing.T) {
-	const maxWait = 30 * time.Second
+	// The client's own cap, so a change to it moves this rule with
+	// it: raise the cap past a date case and the clients each compute
+	// their own wait, which the comparison reports as them disagreeing.
+	maxWait := time.Duration(apiclient.Defaults().MaxRetryAfterMs) * time.Millisecond
 	for _, header := range apiclient.ParityCases() {
 		when, err := http.ParseTime(header)
 		if err != nil {
