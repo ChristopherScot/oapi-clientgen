@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherScot/oapi-clientgen/apiclient"
@@ -214,24 +215,46 @@ func TestRetiredCannotBeChangedByACaller(t *testing.T) {
 // is how paging.test.ts shipped dead: the runner named one file, so the
 // repeated-cursor guard could be deleted with every test passing.
 //
-// Compares the directory against the registry rather than reading the
-// registry twice, for the reason TestRetiredFilesAreRemoved gives
-// above.
+// Compares names, not counts. Counting alone passes when one template
+// is registered twice and another not at all, which is the same defect
+// wearing the right total.
 func TestEveryTestTemplateIsRegistered(t *testing.T) {
 	for _, c := range []struct {
-		glob   string
+		glob string
+		// dst is what the registry should call the file a template
+		// renders: ts_paging_test.ts.tmpl -> paging.test.ts.
+		dst    func(stem string) string
 		render func(apiclient.Params) ([]apiclient.File, error)
 	}{
-		{"ts_*_test.ts.tmpl", apiclient.TypeScriptTests},
-		{"go_*_test.go.tmpl", apiclient.GoTests},
+		{
+			glob:   "ts_*_test.ts.tmpl",
+			dst:    func(stem string) string { return stem + ".test.ts" },
+			render: apiclient.TypeScriptTests,
+		},
+		{
+			glob:   "go_*_test.go.tmpl",
+			dst:    func(stem string) string { return stem + "_test.go" },
+			render: apiclient.GoTests,
+		},
 	} {
-		onDisk, err := filepath.Glob(c.glob)
+		paths, err := filepath.Glob(c.glob)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(onDisk) == 0 {
+		if len(paths) == 0 {
 			t.Fatalf("no %s found; this test is looking in the wrong place", c.glob)
 		}
+
+		var want []string
+		for _, p := range paths {
+			// ts_paging_test.ts.tmpl -> paging
+			stem := strings.TrimSuffix(filepath.Base(p), ".tmpl")
+			stem = strings.TrimSuffix(strings.TrimSuffix(stem, ".ts"), ".go")
+			stem = strings.TrimSuffix(stem, "_test")
+			stem = stem[strings.Index(stem, "_")+1:]
+			want = append(want, c.dst(stem))
+		}
+
 		rendered, err := c.render(apiclient.Params{
 			Name: "probe", Version: "1.0.0", Package: "api",
 			ImportPath: "probe-client", Published: true,
@@ -239,9 +262,16 @@ func TestEveryTestTemplateIsRegistered(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(rendered) != len(onDisk) {
-			t.Errorf("%d %s on disk but %d rendered: an unregistered template's tests never run",
-				len(onDisk), c.glob, len(rendered))
+		var got []string
+		for _, f := range rendered {
+			got = append(got, f.Path)
+		}
+
+		slices.Sort(want)
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s renders %v, want %v: a template missing from the registry "+
+				"renders nowhere, so its tests never run", c.glob, got, want)
 		}
 	}
 }

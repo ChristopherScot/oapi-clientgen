@@ -122,24 +122,27 @@ test('an already-aborted signal fetches nothing', async () => {
   assert.equal(calls, 0, 'an aborted signal should not have reached the server')
 })
 
-// Fetch takes a signal, so it has to arrive: without it an in-flight
-// request cannot be cancelled, only the gap between pages.
+// Fetch takes a signal, so it has to arrive - on every page, not just
+// the first. Without it an in-flight request cannot be cancelled, only
+// the gap between pages, and a long pagination is where a caller
+// cancels. Go cannot get this wrong: its Fetch takes ctx as a required
+// parameter, where TypeScript's signal is optional.
 test('the signal is handed to fetch', async () => {
   const ac = new AbortController()
-  let got: AbortSignal | undefined
+  const got: (AbortSignal | undefined)[] = []
   const fetch = async (
-    _cursor: string | undefined,
+    cursor: string | undefined,
     signal?: AbortSignal,
   ): Promise<Page<number>> => {
-    got = signal
-    return { items: [1] }
+    got.push(signal)
+    return cursor === undefined ? { items: [1], next: '1' } : { items: [2] }
   }
 
   for await (const _ of paged(fetch, ac.signal)) {
     // no body: what fetch received is the subject
   }
 
-  assert.equal(got, ac.signal, 'fetch was not given the signal')
+  assert.deepEqual(got, [ac.signal, ac.signal], 'fetch was not given the signal on every page')
 })
 
 test('an aborted signal rejects', async () => {
