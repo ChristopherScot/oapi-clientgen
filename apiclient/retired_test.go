@@ -251,7 +251,7 @@ func TestEveryTestTemplateIsRegistered(t *testing.T) {
 			stem := strings.TrimSuffix(filepath.Base(p), ".tmpl")
 			stem = strings.TrimSuffix(strings.TrimSuffix(stem, ".ts"), ".go")
 			stem = strings.TrimSuffix(stem, "_test")
-			stem = stem[strings.Index(stem, "_")+1:]
+			_, stem, _ = strings.Cut(stem, "_") // drop the ts_/go_ prefix
 			want = append(want, c.dst(stem))
 		}
 
@@ -270,8 +270,10 @@ func TestEveryTestTemplateIsRegistered(t *testing.T) {
 		slices.Sort(want)
 		slices.Sort(got)
 		if !slices.Equal(got, want) {
-			t.Errorf("%s renders %v, want %v: a template missing from the registry "+
-				"renders nowhere, so its tests never run", c.glob, got, want)
+			t.Errorf("%s renders %v, want %v: either a template is missing from the "+
+				"registry, where it renders nowhere and its tests never run, or the "+
+				"registry renders it under a name this test does not expect",
+				c.glob, got, want)
 		}
 	}
 }
