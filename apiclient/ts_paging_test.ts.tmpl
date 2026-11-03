@@ -9,7 +9,7 @@
 // Run with `node --test` (Node 22+ strips the types; no build step).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { paged, type Page } from './paging.ts'
+import { paged, type Page } from './paging{{ if .Published }}.ts{{ end }}'
 
 // Pages built from a list, so a test says what the server returns and
 // nothing else.
@@ -90,10 +90,56 @@ test('a repeated cursor ends the iteration', async () => {
   }
 
   const got: number[] = []
-  for await (const n of paged(fetch)) got.push(n)
+  for await (const n of paged(fetch)) {
+    got.push(n)
+    // Bounded, so a broken guard fails here rather than running until
+    // the harness kills it.
+    assert.ok(got.length <= 100, 'iterated past 100 items on a repeating cursor')
+  }
 
   assert.deepEqual(got, [1, 1])
   assert.equal(calls, 2, 'the second page repeated the cursor, so there is no third')
+})
+
+// The check runs before the fetch, not after: an already-aborted
+// signal must cost zero requests. Checked after, this still rejects -
+// one page late. The Go suite asserts the same thing.
+test('an already-aborted signal fetches nothing', async () => {
+  const ac = new AbortController()
+  ac.abort()
+  let calls = 0
+  const fetch = async (): Promise<Page<number>> => {
+    calls++
+    return { items: [1], next: '1' }
+  }
+
+  await assert.rejects(async () => {
+    for await (const _ of paged(fetch, ac.signal)) {
+      // no body: the rejection is the subject
+    }
+  }, /aborted/i)
+
+  assert.equal(calls, 0, 'an aborted signal should not have reached the server')
+})
+
+// Fetch takes a signal, so it has to arrive: without it an in-flight
+// request cannot be cancelled, only the gap between pages.
+test('the signal is handed to fetch', async () => {
+  const ac = new AbortController()
+  let got: AbortSignal | undefined
+  const fetch = async (
+    _cursor: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<Page<number>> => {
+    got = signal
+    return { items: [1] }
+  }
+
+  for await (const _ of paged(fetch, ac.signal)) {
+    // no body: what fetch received is the subject
+  }
+
+  assert.equal(got, ac.signal, 'fetch was not given the signal')
 })
 
 test('an aborted signal rejects', async () => {

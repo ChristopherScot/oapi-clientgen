@@ -208,3 +208,40 @@ func TestRetiredCannotBeChangedByACaller(t *testing.T) {
 		t.Error("writing to the returned slice changed the package's own list")
 	}
 }
+
+// A test template that is never registered renders nowhere and runs
+// nowhere, and the suite stays green because it was never asked. That
+// is how paging.test.ts shipped dead: the runner named one file, so the
+// repeated-cursor guard could be deleted with every test passing.
+//
+// Compares the directory against the registry rather than reading the
+// registry twice, for the reason TestRetiredFilesAreRemoved gives
+// above.
+func TestEveryTestTemplateIsRegistered(t *testing.T) {
+	for _, c := range []struct {
+		glob   string
+		render func(apiclient.Params) ([]apiclient.File, error)
+	}{
+		{"ts_*_test.ts.tmpl", apiclient.TypeScriptTests},
+		{"go_*_test.go.tmpl", apiclient.GoTests},
+	} {
+		onDisk, err := filepath.Glob(c.glob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(onDisk) == 0 {
+			t.Fatalf("no %s found; this test is looking in the wrong place", c.glob)
+		}
+		rendered, err := c.render(apiclient.Params{
+			Name: "probe", Version: "1.0.0", Package: "api",
+			ImportPath: "probe-client", Published: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rendered) != len(onDisk) {
+			t.Errorf("%d %s on disk but %d rendered: an unregistered template's tests never run",
+				len(onDisk), c.glob, len(rendered))
+		}
+	}
+}
