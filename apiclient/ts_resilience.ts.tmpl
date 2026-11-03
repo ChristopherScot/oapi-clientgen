@@ -46,7 +46,9 @@ export interface ClientOptions {
    *  because the cost of omitting it falls on whoever operates the
    *  service being called. */
   name: string
-  /** Bounds a single attempt; a retry gets its own. */
+  /** Bounds a single attempt; a retry gets its own, so a retried call
+   *  can run for longer than this. Pass your own `signal` to bound the
+   *  whole call, retries and backoffs included. */
   timeoutMs?: number
   /** Default singleRetry. */
   policy?: RetryPolicy

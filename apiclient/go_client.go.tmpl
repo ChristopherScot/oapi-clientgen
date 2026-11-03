@@ -372,7 +372,9 @@ func (b *Breaker) record(o outcome) {
 // Not Option or ClientOption: ogen generates both into this package.
 type TransportOption func(*HTTPClient)
 
-// WithTimeout bounds ONE attempt; a retry gets its own.
+// WithTimeout bounds ONE attempt; a retry gets its own, so a retried
+// call can run for longer than d. A deadline on the request's context
+// bounds the whole call, retries and backoffs included.
 func WithTimeout(d time.Duration) TransportOption {
 	return func(c *HTTPClient) { c.http.Timeout = d }
 }

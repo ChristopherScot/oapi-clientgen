@@ -70,10 +70,10 @@ Beside the generated operations:
 
 | | |
 |---|---|
-| **Timeout** | 5s per attempt, and a retry gets its own |
-| **Retry** | one retry by default on idempotent methods only; a POST may already have applied |
+| **Timeout** | 5s per attempt, so a call that retries can take longer than 5s overall |
+| **Retry** | one retry by default, on idempotent methods with a replayable body; a POST may already have applied |
 | **`Retry-After`** | obeyed over the local backoff, capped at 30s — a server asking for an hour is told no rather than retried in a second |
-| **Circuit breaker** | opt-in; opens after consecutive failed requests, half-opens one probe at a time |
+| **Circuit breaker** | opt-in; opens on the failure rate over a rolling window, half-opens one probe at a time |
 
 Both languages implement the same rules, and the generator's own tests
 render a client and run its suite to keep them honest.
