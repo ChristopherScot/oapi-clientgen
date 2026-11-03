@@ -80,29 +80,23 @@ render a client and run its suite to keep them honest.
 
 ### Changing the defaults
 
-Options go to `New`. Anything you leave out keeps its default.
+Anything you leave out keeps its default.
 
 ```go
-import "net/http"
-
-// Wait longer, try harder: a slow dependency you would rather
-// wait for than hammer.
-c, err := api.New(url, "webapp",
+// A slow dependency you would rather wait for than hammer.
+api.New(url, "webapp",
 	api.WithTimeout(30*time.Second),
 	api.WithPolicy(api.ExponentialRetry{}),
 )
 
-// Fail fast: one attempt, no retry.
-c, err := api.New(url, "webapp", api.WithPolicy(api.NoRetry{}))
-
-// Stop calling a dependency that is failing.
-c, err := api.New(url, "webapp", api.WithBreaker())
+api.New(url, "webapp", api.WithPolicy(api.NoRetry{}))  // one attempt, no retry
+api.New(url, "webapp", api.WithBreaker())              // stop calling a failing dependency
 ```
 
 TypeScript takes the same settings as one object:
 
 ```ts
-import { createClient, exponentialRetry, noRetry, Breaker } from './api'
+import { createClient, exponentialRetry, noRetry, Breaker, type RetryPolicy } from './api'
 
 const c = createClient({
   baseUrl: url,
@@ -130,7 +124,7 @@ func (sometimes) Retry(req *http.Request, resp *http.Response, err error) bool {
 	return resp != nil && resp.StatusCode == http.StatusServiceUnavailable
 }
 
-c, err := api.New(url, "webapp", api.WithPolicy(sometimes{}))
+api.New(url, "webapp", api.WithPolicy(sometimes{}))
 ```
 
 ```ts
@@ -158,8 +152,8 @@ and use ogen's own constructor, or keep the retries and swap what
 reaches the network underneath them:
 
 ```go
-c, err := api.NewClient(url)                              // no resilience
-c, err := api.New(url, "webapp", api.WithTransport(rt))   // resilience over your transport
+api.NewClient(url)                              // no resilience
+api.New(url, "webapp", api.WithTransport(rt))   // resilience over your transport
 ```
 
 ```ts
