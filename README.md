@@ -71,7 +71,7 @@ Beside the generated operations:
 | | |
 |---|---|
 | **Timeout** | 5s per attempt, so a call that retries can take longer than 5s overall |
-| **Retry** | one retry by default, on idempotent methods — in Go, only with a body it can rewind; a POST may already have applied |
+| **Retry** | one retry by default on idempotent methods only; a POST may already have applied |
 | **`Retry-After`** | obeyed over the local backoff, capped at 30s — a server asking for an hour is told no rather than retried in a second |
 | **Circuit breaker** | opt-in; opens on the failure rate over a rolling window, half-opens one probe at a time |
 
