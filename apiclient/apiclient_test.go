@@ -17,13 +17,22 @@ import (
 // consuming repo turns on allowImportingTsExtensions - which is not
 // ours to ask for.
 func TestVendoredClientImportsWithoutExtensions(t *testing.T) {
-	files, err := TypeScript(Params{
+	p := Params{
 		Name: "zoom-users", Version: "2.0.0", ImportPath: "./users",
 		Published: false,
-	})
+	}
+	files, err := TypeScript(p)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The test templates import the client the same way and break the
+	// same way. Rendering them published, which is all the node harness
+	// does, never reaches the unpublished form.
+	tests, err := TypeScriptTests(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, tests...)
 	if len(files) == 0 {
 		t.Fatal("no files rendered")
 	}

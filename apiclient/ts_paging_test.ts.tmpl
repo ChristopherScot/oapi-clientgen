@@ -145,6 +145,25 @@ test('the signal is handed to fetch', async () => {
   assert.deepEqual(got, [ac.signal, ac.signal], 'fetch was not given the signal on every page')
 })
 
+// Not only a cursor that repeats immediately: a server alternating
+// between two cursors never repeats consecutively, so remembering just
+// the last one spins forever. The Set remembers all of them.
+test('an alternating cursor ends the iteration', async () => {
+  let calls = 0
+  const fetch = async (cursor: string | undefined): Promise<Page<number>> => {
+    calls++
+    return { items: [calls], next: cursor === 'A' ? 'B' : 'A' }
+  }
+
+  const got: number[] = []
+  for await (const n of paged(fetch)) {
+    got.push(n)
+    assert.ok(got.length <= 100, 'iterated past 100 items on an alternating cursor')
+  }
+
+  assert.equal(calls, 3, 'the third page repeated cursor A, so there is no fourth')
+})
+
 test('an aborted signal rejects', async () => {
   const ac = new AbortController()
   const fetch = async (): Promise<Page<number>> => ({ items: [1], next: '1' })
