@@ -1,0 +1,112 @@
+/* eslint-disable */
+{{ header `//` }}//
+// The Go client's paging tests and these cover the same behaviours on
+// purpose: same pages walked, same early exit, same repeated-cursor
+// guard. The one difference is how a failure arrives - Go yields it,
+// this rejects - and the test for it asserts the rejection rather than
+// pretending the shapes match.
+//
+// Run with `node --test` (Node 22+ strips the types; no build step).
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { paged, type Page } from './paging.ts'
+
+// Pages built from a list, so a test says what the server returns and
+// nothing else.
+function server(pages: Page<number>[]): {
+  fetch: (cursor: string | undefined) => Promise<Page<number>>
+  calls: () => number
+} {
+  let calls = 0
+  return {
+    fetch: async (cursor) => {
+      calls++
+      const i = cursor === undefined ? 0 : Number(cursor)
+      return pages[i]
+    },
+    calls: () => calls,
+  }
+}
+
+test('walks every page', async () => {
+  const s = server([
+    { items: [1, 2], next: '1' },
+    { items: [3], next: '2' },
+    { items: [4, 5] },
+  ])
+
+  const got: number[] = []
+  for await (const n of paged(s.fetch)) got.push(n)
+
+  assert.deepEqual(got, [1, 2, 3, 4, 5])
+  assert.equal(s.calls(), 3)
+})
+
+// An early break must stop fetching.
+test('break stops fetching', async () => {
+  const s = server([
+    { items: [1, 2], next: '1' },
+    { items: [3], next: '2' },
+    { items: [4] },
+  ])
+
+  const got: number[] = []
+  for await (const n of paged(s.fetch)) {
+    got.push(n)
+    if (n === 2) break
+  }
+
+  assert.deepEqual(got, [1, 2])
+  assert.equal(s.calls(), 1, 'breaking should not have asked for page 2')
+})
+
+// Where Go yields (zero, err) as a final element, this rejects - and
+// the items from before the failure are still delivered, so a caller
+// cannot mistake a truncated list for a complete one.
+test('a failure rejects, after delivering what arrived', async () => {
+  const boom = new Error('page 2 failed')
+  let calls = 0
+  const fetch = async (cursor: string | undefined): Promise<Page<number>> => {
+    calls++
+    if (cursor === undefined) return { items: [1, 2], next: '1' }
+    throw boom
+  }
+
+  const got: number[] = []
+  await assert.rejects(async () => {
+    for await (const n of paged(fetch)) got.push(n)
+  }, boom)
+
+  assert.deepEqual(got, [1, 2])
+  assert.equal(calls, 2)
+})
+
+// A server that repeats a cursor would otherwise spin forever.
+test('a repeated cursor ends the iteration', async () => {
+  let calls = 0
+  const fetch = async (): Promise<Page<number>> => {
+    calls++
+    return { items: [1], next: 'same' }
+  }
+
+  const got: number[] = []
+  for await (const n of paged(fetch)) got.push(n)
+
+  assert.deepEqual(got, [1, 1])
+  assert.equal(calls, 2, 'the second page repeated the cursor, so there is no third')
+})
+
+test('an aborted signal rejects', async () => {
+  const ac = new AbortController()
+  const fetch = async (): Promise<Page<number>> => ({ items: [1], next: '1' })
+
+  const got: number[] = []
+  await assert.rejects(async () => {
+    for await (const n of paged(fetch, ac.signal)) {
+      got.push(n)
+      ac.abort()
+    }
+  }, /aborted/i)
+
+  assert.deepEqual(got, [1])
+})

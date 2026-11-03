@@ -144,7 +144,15 @@ func runTSClient(t *testing.T) map[string]string {
 	// which loses the diagnosis at the moment it is worth most.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "--test", "--test-timeout=30000", "resilience.test.ts")
+	// Every rendered test file, not a named one: a template whose
+	// tests ship but never run certifies nothing, and the gap is
+	// invisible - the suite stays green because the file is absent
+	// from the command rather than passing.
+	args := []string{"--test", "--test-timeout=30000"}
+	for _, f := range tests {
+		args = append(args, f.Path)
+	}
+	cmd := exec.CommandContext(ctx, "node", args...)
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out

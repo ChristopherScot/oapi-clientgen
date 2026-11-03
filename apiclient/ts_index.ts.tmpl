@@ -28,3 +28,5 @@ export {
   singleRetry,
 } from './resilience{{ if .Published }}.ts{{ end }}'
 export type { ClientOptions, RetryPolicy } from './resilience{{ if .Published }}.ts{{ end }}'
+export { paged } from './paging{{ if .Published }}.ts{{ end }}'
+export type { Fetch, Page } from './paging{{ if .Published }}.ts{{ end }}'
