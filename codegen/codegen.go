@@ -33,6 +33,27 @@ const (
 // OgenCommand is the `go run` invocation of the pinned ogen.
 func OgenCommand() string { return OgenModule + "@" + OgenVersion }
 
+// OgenArgv is how ogen is run, for every caller.
+//
+// Which config it is handed differs - a third-party client's is
+// committed and the author's to edit, a service's own is composed -
+// but how ogen is invoked does not, so a flag every caller needs is
+// added here rather than in each of them.
+//
+// --clean so a removed endpoint's file goes away. Without it a deleted
+// operation leaves generated code behind that still compiles, and the
+// client keeps offering a call the API dropped.
+func OgenArgv(configPath, target, pkg, specPath string) []string {
+	return []string{
+		"go", "run", OgenCommand(),
+		"--config", configPath,
+		"--target", target,
+		"--clean",
+		"--package", pkg,
+		specPath,
+	}
+}
+
 // Swagger2OpenAPICommand converts in to out.
 func Swagger2OpenAPICommand(in, out string) []string {
 	return []string{"npx", "--yes", "swagger2openapi@" + Swagger2OpenAPIVersion, in, "-o", out}

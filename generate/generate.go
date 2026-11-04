@@ -263,17 +263,7 @@ func (g Generator) generateGoClient(dir, name, apiVersion string, c Client, spec
 		return fmt.Errorf("reading %s: %w", cfgPath, err)
 	}
 
-	// --clean so a removed endpoint's file goes away. Without it a
-	// deleted operation leaves generated code behind that still
-	// compiles, and the client keeps offering a call the API dropped.
-	argv := []string{
-		"go", "run", codegen.OgenCommand(),
-		"--config", cfgPath,
-		"--target", out,
-		"--clean",
-		"--package", pkg,
-		specPath,
-	}
+	argv := codegen.OgenArgv(cfgPath, out, pkg, specPath)
 	if err := runIn("generating the Go client for "+name, dir, argv...); err != nil {
 		return err
 	}
