@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,15 +20,17 @@ import (
 // later is covered the moment it is declared, where a list written out
 // here would pass until someone remembered to extend it.
 //
-// Each field is rendered twice, before and after, and the two outputs
-// must differ: a template carrying a literal renders the same thing
-// both times, which asserting against today's values cannot see.
+// Checked by moving the field and looking for the moved value, not by
+// asserting today's: a template carrying a literal renders the right
+// number until the day someone changes the declaration, and that is
+// the day nothing would catch it.
 //
-// Differing, not containing the moved number. The Go template renders
-// a millisecond count in the largest unit that divides it, so the
-// moved value reaches the output as "50 * time.Second" rather than as
-// its own digits, and a search for those digits would report a
-// literal that is not there.
+// Looked for in the form that template writes, because the Go template
+// renders a millisecond count through goDuration and 50000 reaches the
+// output as "50 * time.Second". Asking only whether the output CHANGED
+// would be weaker than it looks - it accepts any arithmetic wrapped
+// around the field, including a divide that turns five seconds into
+// five milliseconds.
 func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 	p := apiclient.Params{
 		Name: "probe", Version: "1.0.0", Package: "api",
@@ -55,19 +58,49 @@ func TestBothLanguagesRenderTheSharedDefaults(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			moved := reflect.New(v.Type()).Elem()
 			moved.Set(v)
-			moved.Field(i).SetInt(v.Field(i).Int() * 10)
-
 			for _, tmpl := range slices.Concat(clients, recorders[name]) {
+				// How this template writes the value: a Go
+				// duration through goDuration, anything else as
+				// digits.
+				form := func(n int64) string {
+					if strings.HasSuffix(tmpl, ".go.tmpl") && strings.HasSuffix(name, "Ms") {
+						return apiclient.GoDuration(int(n))
+					}
+					return strconv.FormatInt(n, 10)
+				}
 				was, err := apiclient.RenderWith(tmpl, p, base)
 				if err != nil {
 					t.Fatal(err)
 				}
+				// A sentinel this template does not already
+				// mention, searched for rather than assumed: the
+				// output is full of unrelated numbers, and one
+				// that collides would be found whether the
+				// template rendered the field or not.
+				//
+				// Multiples of ten, so a duration keeps whatever
+				// unit divides it - an odd sentinel renders as
+				// milliseconds and tests a path the real defaults
+				// never take.
+				sentinel := v.Field(i).Int()
+				for {
+					sentinel *= 10
+					if !strings.Contains(was, form(sentinel)) {
+						break
+					}
+					if sentinel > 1<<40 {
+						t.Fatalf("no sentinel for %s that %s does not already contain", name, tmpl)
+					}
+				}
+				moved.Field(i).SetInt(sentinel)
+
 				now, err := apiclient.RenderWith(tmpl, p, moved.Interface().(apiclient.SharedDefaults))
 				if err != nil {
 					t.Fatal(err)
 				}
-				if was == now {
-					t.Errorf("%s renders the same output with %s moved: a literal is standing in for it", tmpl, name)
+				if !strings.Contains(now, form(sentinel)) {
+					t.Errorf("%s does not render %s as %s: a literal is standing in for it",
+						tmpl, name, form(sentinel))
 				}
 			}
 		})
@@ -114,10 +147,10 @@ func TestTheGoClientWritesDurationsInNaturalUnits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// A whole number of seconds left in milliseconds. Four or more
-		// digits, because 100 * time.Millisecond is already natural
-		// and 1000 is not.
-		for _, m := range regexp.MustCompile(`\b(\d+)000 \* time\.Millisecond\b`).FindAllString(out, -1) {
+		// Milliseconds that are a whole number of seconds, which is
+		// to say ending in 000. 100 * time.Millisecond is already
+		// the natural unit; 1000 is not.
+		for _, m := range regexp.MustCompile(`\b\d+000 \* time\.Millisecond\b`).FindAllString(out, -1) {
 			t.Errorf("%s renders %q; a whole number of seconds belongs in time.Second", tmpl, m)
 		}
 	}

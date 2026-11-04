@@ -19,8 +19,8 @@ import (
 //
 // ogen ships no retries, timeout or breaker. Its only extension point is
 // WithClient, so those live here - defaults chosen for effect on the
-// SYSTEM (one retry, not {{ defaults.ExpAttempts }}: each one multiplies
-// the traffic to something already struggling).
+// SYSTEM (one retry, not several: each one multiplies the traffic to
+// something already struggling).
 //
 //	c, err := api.New(url, "webapp")
 
