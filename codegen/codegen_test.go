@@ -151,3 +151,36 @@ func TestBothConfigsCarryTheSharedHeader(t *testing.T) {
 		}
 	}
 }
+
+// @latest breaks a build on the day an upstream publishes, in a file
+// nobody touched. Every generator is pinned to an exact version, and
+// this is what says so when a fifth one is added.
+func TestEveryGeneratorVersionIsPinnedExactly(t *testing.T) {
+	for name, v := range map[string]string{
+		"ogen":            OgenVersion,
+		"hey-api":         HeyAPIVersion,
+		"typescript":      TypescriptVersion,
+		"swagger2openapi": Swagger2OpenAPIVersion,
+	} {
+		if v == "" || v == "latest" || strings.ContainsAny(v, "^~*") {
+			t.Errorf("%s is pinned to %q, which is a range rather than a version", name, v)
+		}
+	}
+}
+
+// Both callers run ogen through OgenArgv, so --clean is here rather
+// than in each of them. Without it a deleted operation leaves
+// generated code behind that still compiles, and the client keeps
+// offering a call the API dropped.
+func TestOgenAlwaysCleans(t *testing.T) {
+	argv := OgenArgv("cfg.yml", "out", "api", "spec.yml")
+	var found bool
+	for _, a := range argv {
+		if a == "--clean" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("--clean is not in %v", argv)
+	}
+}

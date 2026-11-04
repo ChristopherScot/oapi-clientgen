@@ -28,14 +28,14 @@ After that, `oapi-clientgen update` pulls the newest one.
 No config, nothing committed:
 
 ```sh
-oapi-clientgen generate --spec https://example.com/openapi.json \
+oapi-clientgen generate client --spec https://example.com/openapi.json \
   --out ./internal/acmeapi
 ```
 
 ## Declare them in clients.yaml
 
-Put it at the root of the repo that owns the clients. `generate` with
-no arguments does all of them; naming one does only that.
+Put it at the root of the repo that owns the clients. `generate
+client` with no arguments does all of them; naming one does only that.
 
 ```yaml
 clients:
@@ -50,8 +50,8 @@ clients:
 
 ```sh
 oapi-clientgen list
-oapi-clientgen generate
-oapi-clientgen generate acme --refresh
+oapi-clientgen generate client
+oapi-clientgen generate client acme --refresh
 ```
 
 A remote spec is **vendored on first use** and reused after that, so a
@@ -63,6 +63,25 @@ reviewable diff rather than a surprise.
 Rather than hand-editing the vendored copy — which the next refresh
 would overwrite — a patch is applied on the way through, so the
 vendored file stays exactly what upstream published.
+
+## Generate from a spec you own
+
+A service that owns its spec needs none of the fetching, vendoring or
+patching above - a spec you own is fixed at the source. It needs the
+server scaffolding too, which a consumer of someone else's API never
+wants.
+
+```sh
+oapi-clientgen generate self                      # ./openapi.yml -> ./api
+oapi-clientgen generate self ./openapi.yml --out api
+```
+
+Meant to run from the service's own `go:generate`, so CI's staleness
+gate catches a spec change that was not regenerated.
+
+There is no `ogen.yml` to edit: the settings are the same for every
+service built this way, so they are composed rather than copied into
+each one.
 
 ## What you get
 

@@ -67,6 +67,9 @@ func (g Generator) Self(dir, specPath string, opts SelfOptions) error {
 	return g.tsSelf(dir, specPath, name, apiVersion, opts)
 }
 
+// tsSelf generates and wraps the published TypeScript client, which
+// is built at its own package root rather than vendored into the
+// repo that generated it.
 func (g Generator) tsSelf(dir, specPath, name, apiVersion string, opts SelfOptions) error {
 	out := filepath.Join(dir, opts.TSOut)
 	if !opts.SupportOnly {
@@ -77,8 +80,11 @@ func (g Generator) tsSelf(dir, specPath, name, apiVersion string, opts SelfOptio
 		// consumer compiles in place and wrong for one that ships
 		// compiled.
 		//
-		// Written beside the client rather than to a temp path,
-		// because its output path is relative to itself.
+		// Written beside the client and left there, unlike the Go
+		// path's temp config: hey-api resolves output.path relative
+		// to the config, so a temp path would put generated/ under
+		// /var/folders. Rewritten every run, and it carries the
+		// generated header, so an edit here does not survive.
 		rel, err := filepath.Rel(out, filepath.Join(dir, specPath))
 		if err != nil {
 			return err
@@ -88,9 +94,10 @@ func (g Generator) tsSelf(dir, specPath, name, apiVersion string, opts SelfOptio
 			return err
 		}
 
-		// cmd.Dir rather than a shell that cds: runIn runs argv
-		// directly, so a directory with a quote in it is a directory
-		// rather than an injection.
+		// Not codegen.HeyAPICommandIn, which builds an `sh -c "cd
+		// '<dir>' && ..."` for a caller that cannot set a working
+		// directory: a directory name holding a quote escapes that
+		// quoting. runIn sets cmd.Dir and execs argv directly.
 		if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand("openapi-ts.config.ts")...); err != nil {
 			return err
 		}
@@ -115,6 +122,11 @@ type SelfOptions struct {
 
 	// TSOut is where the published TypeScript client goes, relative
 	// to dir. Empty for a service that does not publish one.
+	//
+	// The directory must already hold the package.json and tsconfig
+	// the client ships with: the generated resilience layer reads its
+	// version from that package.json, and its imports carry '.ts' on
+	// the assumption that tsconfig rewrites them.
 	TSOut string
 
 	// NPMPackage is how a consumer imports the TypeScript client.
@@ -130,10 +142,6 @@ type SelfOptions struct {
 // runOgenForSelf generates the server and client from a spec the
 // service owns.
 //
-// The config is composed here rather than written to the output
-// directory, because there is one answer for every service we build
-// and a file per service is a copy that can drift from it.
-//
 // otel is off. ogen instruments every operation by default, which
 // costs a consumer 13 modules and ~1.5MB of binary and produces spans
 // that go nowhere unless a TracerProvider exists and a collector is
@@ -144,10 +152,16 @@ type SelfOptions struct {
 // Metrics and request logging do not come from ogen. They are the
 // service's own middleware, keyed on the spec's operation IDs.
 //
-// No ignore_not_implemented, which is the one way this differs from
-// the config a third-party client gets: a spec you own is fixed when
-// ogen cannot express it, so skipping an operation would hide a
-// problem you are able to correct.
+// No ignore_not_implemented: a spec you own is fixed when ogen cannot
+// express it, so skipping an operation would hide a problem you can
+// correct. A third-party config keeps it for the opposite reason -
+// see thirdPartyOgenConfig.
+//
+// That config is also written to ogen.yml beside the output and left
+// for the author to edit. This one is composed into a temp file every
+// run, which is the bigger difference: there is one right answer for
+// every service built this way, and a file per service is a copy that
+// drifts.
 func (g Generator) runOgenForSelf(dir, specPath string, opts SelfOptions) error {
 	out := filepath.Join(dir, opts.GoOut)
 	if err := os.MkdirAll(out, 0o755); err != nil {

@@ -93,6 +93,66 @@ func TestTheNameComesFromTheSpecWhenNobodySaysOtherwise(t *testing.T) {
 	if !strings.Contains(string(body), "probe-service") {
 		t.Error("the spec's info.title did not reach the generated client")
 	}
+	if !strings.Contains(string(body), `ClientVersion = "2.1.0"`) {
+		t.Error("the spec's info.version did not reach ClientVersion; a client reporting " +
+			"'unknown' tells a server nothing about which versions still call it")
+	}
+}
+
+// The published client names its imports by package and carries .ts,
+// because it ships compiled and owns the tsconfig that rewrites them.
+// A vendored one does neither.
+func TestThePublishedClientImportsByPackageName(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"api", "clients/ts"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "openapi.yml"), []byte(selfTestSpec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Generator{}).Self(dir, "openapi.yml", SelfOptions{
+		GoOut: "api", Package: "api",
+		TSOut: "clients/ts", NPMPackage: "@probe/client",
+		SupportOnly: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(dir, "clients", "ts", "index.ts"))
+	if err != nil {
+		t.Fatalf("no TypeScript client was written: %v", err)
+	}
+	if !strings.Contains(string(body), ".ts'") {
+		t.Error("imports do not carry '.ts'; a published client ships compiled and its " +
+			"tsconfig rewrites them on the way into dist")
+	}
+}
+
+// A service that asks for no TypeScript client gets none, rather than
+// one in a directory it did not name.
+func TestNoTSOutMeansNoTypeScriptClient(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "openapi.yml"), []byte(selfTestSpec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Generator{}).Self(dir, "openapi.yml", SelfOptions{
+		GoOut: "api", Package: "api", SupportOnly: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, stray := range []string{"index.ts", "resilience.ts", "paging.ts"} {
+		if _, err := os.Stat(filepath.Join(dir, stray)); err == nil {
+			t.Errorf("%s was written for a service that asked for no TypeScript client", stray)
+		}
+	}
 }
 
 const selfTestSpec = `openapi: 3.0.0
