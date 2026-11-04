@@ -78,6 +78,88 @@ Beside the generated operations:
 Both languages implement the same rules, and the generator's own tests
 render a client and run its suite to keep them honest.
 
+### Changing the defaults
+
+Anything you leave out keeps its default.
+
+```go
+// A slow dependency you would rather wait for than hammer.
+api.New(url, "webapp",
+	api.WithTimeout(30*time.Second),
+	api.WithPolicy(api.ExponentialRetry{}),
+)
+
+api.New(url, "webapp", api.WithPolicy(api.NoRetry{}))  // one attempt, no retry
+api.New(url, "webapp", api.WithBreaker())              // stop calling a failing dependency
+```
+
+TypeScript takes the same settings as one object:
+
+```ts
+import { createClient, exponentialRetry, noRetry, Breaker, type RetryPolicy } from './api'
+
+const c = createClient({
+  baseUrl: url,
+  name: 'webapp',
+  timeoutMs: 30_000,
+  policy: exponentialRetry,
+})
+
+const fastFail = createClient({ baseUrl: url, name: 'webapp', policy: noRetry })
+const guarded = createClient({ baseUrl: url, name: 'webapp', breaker: new Breaker() })
+```
+
+**Your own retry rule.** A policy is two methods: how long to wait
+before each attempt, and whether a given failure is worth repeating.
+The length of the backoff list is the retry count.
+
+```go
+type sometimes struct{}
+
+func (sometimes) Backoffs() []time.Duration {
+	return []time.Duration{time.Second, 3 * time.Second}
+}
+
+func (sometimes) Retry(req *http.Request, resp *http.Response, err error) bool {
+	return resp != nil && resp.StatusCode == http.StatusServiceUnavailable
+}
+
+api.New(url, "webapp", api.WithPolicy(sometimes{}))
+```
+
+```ts
+const sometimes: RetryPolicy = {
+  backoffs: () => [1000, 3000],
+  retry: (req, res) => res?.status === 503,
+}
+```
+
+**Bounding the whole call.** The timeout above covers one attempt.
+To cap everything — attempts, waits, body read — give the request its
+own deadline:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+// pass ctx to the operation; the retry loop stops when it does
+```
+
+In TypeScript, pass a `signal` with the request. One signal covers
+every attempt and the waits between them.
+
+**Skipping this transport.** It plugs into ogen, so you can drop it
+and use ogen's own constructor, or keep the retries and swap what
+reaches the network underneath them:
+
+```go
+api.NewClient(url)                              // no resilience
+api.New(url, "webapp", api.WithTransport(rt))   // resilience over your transport
+```
+
+```ts
+createClient({ baseUrl: url, name: 'webapp', fetch: myFetch })
+```
+
 ### What counts as a failure
 
 The breaker distinguishes three outcomes, not two. A 501 or 505 is a
