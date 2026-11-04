@@ -992,7 +992,7 @@ func TestPrintRetryAfterVerdicts(t *testing.T) {
 {{ range parityCases }}		{{ printf "%q" . }},
 {{ end }}	} {
 		resp := &http.Response{Header: http.Header{"Retry-After": []string{in}}}
-		wait, ok, tooLong := retryAfter(resp, {{ defaults.MaxRetryAfterMs }}*time.Millisecond)
+		wait, ok, tooLong := retryAfter(resp, {{ goDuration defaults.MaxRetryAfterMs }})
 		switch {
 		case tooLong:
 			answers[in] = "{{ verdicts.Stop }}"

@@ -124,6 +124,7 @@ func renderWith(name string, p Params, d SharedDefaults) (string, error) {
 		"goName":      goName,
 		"goPath":      goPath,
 		"tsPath":      tsPath,
+		"goDuration":  goDuration,
 	}).Parse(string(b))
 	if err != nil {
 		return "", fmt.Errorf("apiclient: parsing %s: %w", name, err)
@@ -144,6 +145,30 @@ func goName(operationID string) string {
 	}
 	r := []rune(operationID)
 	return string(unicode.ToUpper(r[0])) + string(r[1:])
+}
+
+// goDuration writes a count of milliseconds as the time.Duration
+// expression a Go author would have written: 30000 becomes
+// 30 * time.Second, 100 stays 100 * time.Millisecond.
+//
+// The shared defaults are in milliseconds because that is the unit
+// TypeScript has. Rendering that number straight into Go multiplied by
+// time.Millisecond is arithmetically right and reads as a mistake -
+// 10000 * time.Millisecond gives no sense of ten seconds.
+func goDuration(ms int) string {
+	for _, u := range []struct {
+		name string
+		per  int
+	}{
+		{"time.Hour", 3600000},
+		{"time.Minute", 60000},
+		{"time.Second", 1000},
+	} {
+		if ms >= u.per && ms%u.per == 0 {
+			return fmt.Sprintf("%d * %s", ms/u.per, u.name)
+		}
+	}
+	return fmt.Sprintf("%d * time.Millisecond", ms)
 }
 
 // goPath turns a JSON Pointer into the Go field accesses that reach
@@ -287,7 +312,8 @@ var verdictVocabulary = VerdictWords{
 // moved in one language only would be a difference no test could see.
 //
 // Durations are milliseconds because that is the unit TypeScript has;
-// the Go template renders them back into time.Duration.
+// goDuration renders them back into the time.Duration expression a Go
+// author would have written.
 type SharedDefaults struct {
 	TimeoutMs       int
 	SingleBackoffMs int

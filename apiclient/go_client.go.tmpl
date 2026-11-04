@@ -19,8 +19,8 @@ import (
 //
 // ogen ships no retries, timeout or breaker. Its only extension point is
 // WithClient, so those live here - defaults chosen for effect on the
-// SYSTEM (one retry, not several: each one multiplies the traffic to
-// something already struggling).
+// SYSTEM (one retry, not {{ defaults.ExpAttempts }}: each one multiplies
+// the traffic to something already struggling).
 //
 //	c, err := api.New(url, "webapp")
 
@@ -47,7 +47,7 @@ type RetryPolicy interface {
 type SingleRetry struct{}
 
 func (SingleRetry) Backoffs() []time.Duration {
-	return []time.Duration{{"{"}}{{ defaults.SingleBackoffMs }} * time.Millisecond}
+	return []time.Duration{{"{"}}{{ goDuration defaults.SingleBackoffMs }}}
 }
 func (SingleRetry) Retry(req *http.Request, resp *http.Response, err error) bool {
 	return retryable(req, resp, err)
@@ -60,7 +60,7 @@ type ExponentialRetry struct{}
 
 func (ExponentialRetry) Backoffs() []time.Duration {
 	out := make([]time.Duration, {{ defaults.ExpAttempts }})
-	next := {{ defaults.ExpSeedMs }} * time.Millisecond
+	next := {{ goDuration defaults.ExpSeedMs }}
 	for i := range out {
 		// Jitter, so a fleet of callers does not retry in lockstep and
 		// arrive as one synchronised wave.
@@ -204,10 +204,10 @@ type BreakerPolicy struct {
 // dependency failing half of what it is asked is unwell.
 func DefaultBreakerPolicy() BreakerPolicy {
 	return BreakerPolicy{
-		Window:      {{ defaults.BreakerWindowMs }} * time.Millisecond,
+		Window:      {{ goDuration defaults.BreakerWindowMs }},
 		MinRequests: {{ defaults.BreakerMinReqs }},
 		FailPercent: {{ defaults.BreakerFailPct }},
-		Cooldown:    {{ defaults.BreakerCooldownMs }} * time.Millisecond,
+		Cooldown:    {{ goDuration defaults.BreakerCooldownMs }},
 	}
 }
 
@@ -444,9 +444,9 @@ var _ ht.Client = (*HTTPClient)(nil)
 // service being called, not on the caller who left it out.
 func NewHTTPClient(name string, opts ...TransportOption) *HTTPClient {
 	c := &HTTPClient{
-		http:          &http.Client{Timeout: {{ defaults.TimeoutMs }} * time.Millisecond},
+		http:          &http.Client{Timeout: {{ goDuration defaults.TimeoutMs }}},
 		policy:        SingleRetry{},
-		maxRetryAfter: {{ defaults.MaxRetryAfterMs }} * time.Millisecond,
+		maxRetryAfter: {{ goDuration defaults.MaxRetryAfterMs }},
 		name:          name,
 	}
 	for _, o := range opts {
