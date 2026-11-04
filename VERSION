@@ -1,5 +1,6 @@
-v0.0.7
+v0.0.8
 
+v0.0.8 Generates from a spec a service owns, and pages it
 v0.0.7 The circuit breaker opens on a failure rate, not a run of failures
 v0.0.6 A TypeScript caller can supply the fetch under the resilience
 v0.0.5 Optional client config is passed as options, and a name is required
