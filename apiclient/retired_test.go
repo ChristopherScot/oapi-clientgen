@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherScot/oapi-clientgen/apiclient"
@@ -206,5 +207,73 @@ func TestRetiredCannotBeChangedByACaller(t *testing.T) {
 
 	if again := apiclient.Retired()[0]; again == "client.go" {
 		t.Error("writing to the returned slice changed the package's own list")
+	}
+}
+
+// A test template that is never registered renders nowhere and runs
+// nowhere, and the suite stays green because it was never asked. That
+// is how paging.test.ts shipped dead: the runner named one file, so the
+// repeated-cursor guard could be deleted with every test passing.
+//
+// Compares names, not counts. Counting alone passes when one template
+// is registered twice and another not at all, which is the same defect
+// wearing the right total.
+func TestEveryTestTemplateIsRegistered(t *testing.T) {
+	for _, c := range []struct {
+		glob string
+		// dst is what the registry should call the file a template
+		// renders: ts_paging_test.ts.tmpl -> paging.test.ts.
+		dst    func(stem string) string
+		render func(apiclient.Params) ([]apiclient.File, error)
+	}{
+		{
+			glob:   "ts_*_test.ts.tmpl",
+			dst:    func(stem string) string { return stem + ".test.ts" },
+			render: apiclient.TypeScriptTests,
+		},
+		{
+			glob:   "go_*_test.go.tmpl",
+			dst:    func(stem string) string { return stem + "_test.go" },
+			render: apiclient.GoTests,
+		},
+	} {
+		paths, err := filepath.Glob(c.glob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(paths) == 0 {
+			t.Fatalf("no %s found; this test is looking in the wrong place", c.glob)
+		}
+
+		var want []string
+		for _, p := range paths {
+			// ts_paging_test.ts.tmpl -> paging
+			stem := strings.TrimSuffix(filepath.Base(p), ".tmpl")
+			stem = strings.TrimSuffix(strings.TrimSuffix(stem, ".ts"), ".go")
+			stem = strings.TrimSuffix(stem, "_test")
+			_, stem, _ = strings.Cut(stem, "_") // drop the ts_/go_ prefix
+			want = append(want, c.dst(stem))
+		}
+
+		rendered, err := c.render(apiclient.Params{
+			Name: "probe", Version: "1.0.0", Package: "api",
+			ImportPath: "probe-client", Published: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range rendered {
+			got = append(got, f.Path)
+		}
+
+		slices.Sort(want)
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s renders %v, want %v: either a template is missing from the "+
+				"registry, where it renders nowhere and its tests never run, or the "+
+				"registry renders it under a name this test does not expect",
+				c.glob, got, want)
+		}
 	}
 }

@@ -1,0 +1,56 @@
+/* eslint-disable */
+{{ header `//` }}// Paging for the {{ .Name }} client. A cursor loop written by hand is
+// easy to get subtly wrong: forgetting to update the cursor is an
+// infinite loop against a real service, and missing an error check
+// silently truncates.
+//
+//     for await (const user of paged((cursor) =>
+//       listUsers({ query: { after: cursor } }).then((res) => ({
+//         items: res.data.items,
+//         next: res.data.nextCursor,
+//       })),
+//     )) {
+//       // use user
+//     }
+
+/** One response from a paged operation. An empty `next` ends the iteration. */
+export interface Page<T> {
+  items: T[]
+  next?: string
+}
+
+/** Requests one page. `cursor` is undefined on the first call. */
+export type Fetch<T> = (cursor: string | undefined, signal?: AbortSignal) => Promise<Page<T>>
+
+/**
+ * Yields items until the pages run out. Breaking out of the loop stops
+ * fetching.
+ *
+ * A failure rejects rather than being yielded, which is where the Go
+ * client differs: its Paged yields (zero, err) as a final element
+ * because a range loop has nowhere else to put an error. `for await`
+ * routes a rejection to the caller's catch, so the same guarantee -
+ * you cannot process a truncated list without noticing - costs nothing
+ * here.
+ */
+export async function* paged<T>(
+  fetch: Fetch<T>,
+  signal?: AbortSignal,
+): AsyncGenerator<T, void, undefined> {
+  let cursor: string | undefined
+  const seen = new Set<string>()
+
+  for (;;) {
+    signal?.throwIfAborted()
+
+    const page = await fetch(cursor, signal)
+    for (const item of page.items) {
+      yield item
+    }
+
+    // A server that repeats a cursor would spin forever.
+    if (!page.next || seen.has(page.next)) return
+    seen.add(page.next)
+    cursor = page.next
+  }
+}

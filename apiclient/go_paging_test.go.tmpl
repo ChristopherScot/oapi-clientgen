@@ -92,6 +92,30 @@ func TestPagedStopsOnARepeatedCursor(t *testing.T) {
 	}
 }
 
+// Not only a cursor that repeats immediately: a server alternating
+// between two cursors never repeats consecutively, so remembering just
+// the last one spins forever. seen remembers all of them.
+func TestPagedStopsOnAnAlternatingCursor(t *testing.T) {
+	calls := 0
+	fetch := func(_ context.Context, cursor string) (Page[string], error) {
+		calls++
+		next := "A"
+		if cursor == "A" {
+			next = "B"
+		}
+		return Page[string]{Items: []string{"x"}, Next: next}, nil
+	}
+	n := 0
+	for range Paged(context.Background(), fetch) {
+		if n++; n > 100 {
+			t.Fatal("iterated past 100 items on an alternating cursor")
+		}
+	}
+	if calls != 3 {
+		t.Errorf("made %d calls on an alternating cursor, want 3", calls)
+	}
+}
+
 func TestPagedStopsWhenTheContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

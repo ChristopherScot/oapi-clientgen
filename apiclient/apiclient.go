@@ -102,6 +102,7 @@ type templateFile struct{ tmpl, path string }
 // adding a file does not mean remembering a second list.
 var tsFiles = []templateFile{
 	{"ts_resilience.ts.tmpl", "resilience.ts"},
+	{"ts_paging.ts.tmpl", "paging.ts"},
 	{"ts_index.ts.tmpl", "index.ts"},
 }
 
@@ -132,6 +133,7 @@ var goFiles = []templateFile{
 // consumer's choice would be a second copy.
 var tsTestFiles = []templateFile{
 	{"ts_resilience_test.ts.tmpl", "resilience.test.ts"},
+	{"ts_paging_test.ts.tmpl", "paging.test.ts"},
 }
 
 var goTestFiles = []templateFile{

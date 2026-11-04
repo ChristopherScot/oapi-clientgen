@@ -35,6 +35,10 @@ type Fetch[T any] func(ctx context.Context, cursor string) (Page[T], error)
 // Paged yields an error exactly once, as its final element, and stops -
 // so a `range` loop that checks err and returns cannot silently process
 // a truncated list. Breaking out of the loop stops fetching.
+//
+// The TypeScript client rejects instead of yielding, because `for await`
+// routes a rejection to the caller's catch and a range loop has nowhere
+// to put one. Same guarantee, the shape each language expects.
 func Paged[T any](ctx context.Context, fetch Fetch[T]) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var cursor string
