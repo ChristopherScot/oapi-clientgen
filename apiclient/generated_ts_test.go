@@ -273,22 +273,35 @@ func TestNoTypeScriptParameterListEndsInAComma(t *testing.T) {
 
 // renderedTS is every TypeScript file the templates write, client and
 // tests, for the checks that hold over all of them.
+//
+// Both with and without a paged operation. A spec with none - Zoom's,
+// for one - skips the {{ if .Paged }} blocks, and a template can be
+// wrong only on the path the other fixture never renders: that is how
+// a trailing blank line in index.ts survived a test that rendered
+// only the paged case.
 func renderedTS(t *testing.T) []apiclient.File {
 	t.Helper()
-	p := apiclient.Params{
-		Name: "probe", Version: "1.0.0", ImportPath: "probe-client", Published: true,
-		Paged: []apiclient.PagedOp{{
+	var out []apiclient.File
+	for _, paged := range [][]apiclient.PagedOp{
+		{{
 			OperationID: "listThings", CursorParam: "after",
 			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
 		}},
+		nil,
+	} {
+		p := apiclient.Params{
+			Name: "probe", Version: "1.0.0", ImportPath: "probe-client",
+			Published: true, Paged: paged,
+		}
+		client, err := apiclient.TypeScript(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tests, err := apiclient.TypeScriptTests(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append(client, tests...)...)
 	}
-	client, err := apiclient.TypeScript(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests, err := apiclient.TypeScriptTests(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(client, tests...)
+	return out
 }
