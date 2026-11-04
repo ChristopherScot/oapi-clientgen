@@ -63,6 +63,14 @@ func runTSClient(t *testing.T) map[string]string {
 	// specifiers differ.
 	p := apiclient.Params{
 		Name: "probe", Version: "1.0.0", ImportPath: "probe-client", Published: true,
+		// The one paged operation in minimalSpec, resolved the way
+		// generate's reader resolves it. Set here rather than read
+		// from the spec because this package does not read specs -
+		// that is generate's job, and its own tests cover it.
+		Paged: []apiclient.PagedOp{{
+			OperationID: "listThings", CursorParam: "after", CursorIn: "query",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
+		}},
 	}
 	client, err := apiclient.TypeScript(p)
 	if err != nil {

@@ -66,6 +66,14 @@ func runGoClient(t *testing.T) map[string]string {
 	p := apiclient.Params{
 		Name: "probe", Version: "1.0.0", Package: "api",
 		ImportPath: "example.com/probe/api",
+		// The one paged operation in minimalSpec, resolved the way
+		// generate's reader resolves it. Set here rather than read
+		// from the spec because this package does not read specs -
+		// that is generate's job, and its own tests cover it.
+		Paged: []apiclient.PagedOp{{
+			OperationID: "listThings", CursorParam: "after", CursorIn: "query",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
+		}},
 	}
 	client, err := apiclient.Go(p)
 	if err != nil {
@@ -153,4 +161,28 @@ paths:
           content:
             application/json:
               schema: {type: string}
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - {name: after, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ThingList'}
+components:
+  schemas:
+    Thing:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+    ThingList:
+      type: object
+      required: [things]
+      properties:
+        things: {type: array, items: {$ref: '#/components/schemas/Thing'}}
+        nextCursor: {type: string}
 `

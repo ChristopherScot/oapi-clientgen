@@ -30,3 +30,6 @@ export {
 export type { ClientOptions, RetryPolicy } from './resilience{{ if .Published }}.ts{{ end }}'
 export { paged } from './paging{{ if .Published }}.ts{{ end }}'
 export type { Fetch, Page } from './paging{{ if .Published }}.ts{{ end }}'
+{{ if .Paged }}// The per-operation iterators, beside the operations themselves.
+export { {{ range $i, $op := .Paged }}{{ if $i }}, {{ end }}{{ $op.OperationID }}Iter{{ end }} } from './paging_ops{{ if .Published }}.ts{{ end }}'
+{{ end }}

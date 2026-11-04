@@ -284,9 +284,13 @@ func (g Generator) generateGoClient(dir, name, apiVersion string, c Client, spec
 	if err != nil {
 		return err
 	}
+	paged, err := pagedOperations(specPath)
+	if err != nil {
+		return err
+	}
 	if err := g.syncSupportFiles(out, apiclient.Go, apiclient.Params{
 		Name: name, Version: apiVersion, Package: pkg,
-		HasSecurity: hasSecurity,
+		HasSecurity: hasSecurity, Paged: paged,
 	}); err != nil {
 		return err
 	}
@@ -321,8 +325,12 @@ func (g Generator) generateTSClient(dir, name, apiVersion string, c Client, spec
 	if err := apiclient.MarkGenerated(filepath.Join(out, "generated")); err != nil {
 		return err
 	}
+	paged, err := pagedOperations(specPath)
+	if err != nil {
+		return err
+	}
 	if err := g.syncSupportFiles(out, apiclient.TypeScript, apiclient.Params{
-		Name: name, Version: apiVersion,
+		Name: name, Version: apiVersion, Paged: paged,
 		// Published is left false: this client lives in the repo that
 		// generated it, so a consumer imports the directory rather
 		// than a package name. See apiclient.Params for what else
