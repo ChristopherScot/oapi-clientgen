@@ -23,3 +23,7 @@ func RenderWith(name string, p Params, d SharedDefaults) (string, error) {
 
 // Verdicts is the vocabulary both recorders render.
 func Verdicts() VerdictWords { return verdictVocabulary }
+
+// GoDuration is the millisecond-to-time.Duration rendering, for the
+// tests that check what the Go templates write.
+func GoDuration(ms int) string { return goDuration(ms) }
