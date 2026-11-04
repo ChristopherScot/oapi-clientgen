@@ -218,3 +218,54 @@ const probeTSConfig = `{
   "include": ["*.ts", "generated/**/*.ts"]
 }
 `
+
+// No parameter list ends in a trailing comma.
+//
+// ES5 has no such comma, so a project configuring its formatter for
+// es5 trailing commas - which biome's default is - reports every file
+// that carries one. The generated client is not the consumer's to
+// reformat: it carries a "do not edit" header, and the next
+// regeneration would put the comma back.
+//
+// Found in schoolhouse/app, where `yarn lint` failed on paging.ts for
+// exactly this, in a repo that had just adopted the generator.
+//
+// Checks the rendered output over every TypeScript template rather
+// than the three lines that were wrong, so a template added later is
+// covered when it is written.
+func TestNoTypeScriptParameterListEndsInAComma(t *testing.T) {
+	p := apiclient.Params{
+		Name: "probe", Version: "1.0.0", ImportPath: "probe-client", Published: true,
+		Paged: []apiclient.PagedOp{{
+			OperationID: "listThings", CursorParam: "after",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
+		}},
+	}
+	client, err := apiclient.TypeScript(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests, err := apiclient.TypeScriptTests(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range append(client, tests...) {
+		lines := strings.Split(f.Body, "\n")
+		for i, line := range lines {
+			if i+1 >= len(lines) || !strings.HasSuffix(strings.TrimSpace(line), ",") {
+				continue
+			}
+			// A parameter list, not an argument list: what follows
+			// the close paren is a return type or a function body.
+			// ES5 allows the comma in a CALL, and biome leaves those
+			// alone, so matching every ")" would fail on correct code.
+			next := strings.TrimSpace(lines[i+1])
+			if strings.HasPrefix(next, "):") || strings.HasPrefix(next, ") {") ||
+				strings.HasPrefix(next, ") =>") {
+				t.Errorf("%s:%d ends a parameter list with a comma:\n\t%s\n\t%s",
+					f.Path, i+1, strings.TrimSpace(line), next)
+			}
+		}
+	}
+}
