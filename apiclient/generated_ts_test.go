@@ -219,6 +219,23 @@ const probeTSConfig = `{
 }
 `
 
+// Every rendered file ends in exactly one newline.
+//
+// A second one is a format error in every consumer whatever their
+// config, unlike the comma below - a {{ end }} on its own line leaves
+// the newline before it behind, which is what ts_index and
+// ts_paging_ops did.
+func TestRenderedTypeScriptEndsInOneNewline(t *testing.T) {
+	for _, f := range renderedTS(t) {
+		if !strings.HasSuffix(f.Body, "\n") {
+			t.Errorf("%s does not end in a newline", f.Path)
+		}
+		if strings.HasSuffix(f.Body, "\n\n") {
+			t.Errorf("%s ends in a blank line", f.Path)
+		}
+	}
+}
+
 // No parameter list ends in a trailing comma.
 //
 // ES5 has no such comma, so a project configuring its formatter for
@@ -234,23 +251,7 @@ const probeTSConfig = `{
 // than the three lines that were wrong, so a template added later is
 // covered when it is written.
 func TestNoTypeScriptParameterListEndsInAComma(t *testing.T) {
-	p := apiclient.Params{
-		Name: "probe", Version: "1.0.0", ImportPath: "probe-client", Published: true,
-		Paged: []apiclient.PagedOp{{
-			OperationID: "listThings", CursorParam: "after",
-			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
-		}},
-	}
-	client, err := apiclient.TypeScript(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests, err := apiclient.TypeScriptTests(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, f := range append(client, tests...) {
+	for _, f := range renderedTS(t) {
 		lines := strings.Split(f.Body, "\n")
 		for i, line := range lines {
 			if i+1 >= len(lines) || !strings.HasSuffix(strings.TrimSpace(line), ",") {
@@ -268,4 +269,26 @@ func TestNoTypeScriptParameterListEndsInAComma(t *testing.T) {
 			}
 		}
 	}
+}
+
+// renderedTS is every TypeScript file the templates write, client and
+// tests, for the checks that hold over all of them.
+func renderedTS(t *testing.T) []apiclient.File {
+	t.Helper()
+	p := apiclient.Params{
+		Name: "probe", Version: "1.0.0", ImportPath: "probe-client", Published: true,
+		Paged: []apiclient.PagedOp{{
+			OperationID: "listThings", CursorParam: "after",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
+		}},
+	}
+	client, err := apiclient.TypeScript(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests, err := apiclient.TypeScriptTests(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(client, tests...)
 }

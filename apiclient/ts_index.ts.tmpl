@@ -34,4 +34,4 @@ export type { Fetch, Page } from './paging{{ if .Published }}.ts{{ end }}'
 // a caller importing listThings finds listThingsIter without a second
 // import path.
 export { {{ range $i, $op := .Paged }}{{ if $i }}, {{ end }}{{ $op.OperationID }}Iter{{ end }} } from './paging_ops{{ if .Published }}.ts{{ end }}'
-{{ end }}
+{{- end }}
