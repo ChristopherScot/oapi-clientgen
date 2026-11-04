@@ -171,16 +171,9 @@ func (g Generator) runOgenForSelf(dir, specPath string, opts SelfOptions) error 
 		return err
 	}
 
-	// --clean so a removed endpoint's file goes away. The resilience
-	// layer is written after, so it survives.
-	argv := []string{
-		"go", "run", codegen.OgenCommand(),
-		"--config", cfg.Name(),
-		"--target", out,
-		"--clean",
-		"--package", pkg,
-		filepath.Join(dir, specPath),
-	}
+	// The resilience layer is written after ogen, so --clean does not
+	// take it.
+	argv := codegen.OgenArgv(cfg.Name(), out, pkg, filepath.Join(dir, specPath))
 	return runIn("generating the server and client for "+pkg, dir, argv...)
 }
 
