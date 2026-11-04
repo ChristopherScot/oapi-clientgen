@@ -22,6 +22,8 @@ import (
 // truncated list. Breaking out stops fetching.
 func (c *Client) {{ goName .OperationID }}Iter(ctx context.Context, params {{ goName .OperationID }}Params) iter.Seq2[{{ .ItemType }}, error] {
 	return Paged(ctx, func(ctx context.Context, cursor string) (Page[{{ .ItemType }}], error) {
+		// params is the closure's own copy, so overwriting the cursor
+		// each page leaves the caller's untouched.
 		if cursor != "" {
 			params.{{ goName .CursorParam }} = NewOptString(cursor)
 		}

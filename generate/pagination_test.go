@@ -56,8 +56,8 @@ func TestTheConventionNeedsNoExtension(t *testing.T) {
 		t.Fatalf("found %d paged operations, want 1", len(ops))
 	}
 	got := ops[0]
-	if got.OperationID != "listThings" || got.CursorParam != "after" || got.CursorIn != "query" {
-		t.Errorf("cursor = %s %s on %s", got.CursorParam, got.CursorIn, got.OperationID)
+	if got.OperationID != "listThings" || got.CursorParam != "after" {
+		t.Errorf("cursor = %s on %s", got.CursorParam, got.OperationID)
 	}
 	if got.NextPath != "/nextCursor" || got.ItemsPath != "/things" || got.ItemType != "Thing" {
 		t.Errorf("next=%s items=%s type=%s", got.NextPath, got.ItemsPath, got.ItemType)
@@ -216,5 +216,93 @@ func TestNoPagedOperationsMeansNoFile(t *testing.T) {
 		if f.Path == "paging_ops.go" {
 			t.Errorf("paging_ops.go shipped for a spec that pages nothing:\n%s", f.Body)
 		}
+	}
+}
+
+// after in a header is not the cursor. The convention is a name AND a
+// location: the name alone would match a date filter passed as a
+// header and generate a query parameter the operation cannot read.
+func TestAfterSomewhereOtherThanTheQueryIsNotTheCursor(t *testing.T) {
+	ops, err := pagedOperations(spec(t, strings.Replace(oneArray,
+		"- {name: after, in: query, schema: {type: string}}",
+		"- {name: after, in: header, schema: {type: string}}", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 0 {
+		t.Errorf("found %d paged operations for a header named after: %+v", len(ops), ops)
+	}
+}
+
+// The override matches on location too, so naming a parameter that
+// exists somewhere else is still wrong.
+func TestAnOverrideMatchesTheLocationAsWell(t *testing.T) {
+	_, err := pagedOperations(spec(t, strings.NewReplacer(
+		"- {name: after, in: query, schema: {type: string}}",
+		"- {name: page_token, in: header, schema: {type: string}}",
+		"      operationId: listThings",
+		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token, in: query}\n        next: /nextCursor",
+	).Replace(oneArray)))
+	if err == nil {
+		t.Fatal("a cursor naming a header as though it were a query parameter was accepted")
+	}
+	if !strings.Contains(err.Error(), "page_token") {
+		t.Errorf("error does not name the cursor: %v", err)
+	}
+}
+
+// in defaults to query, which is the whole point of letting it be
+// omitted.
+func TestAnOverrideWithoutALocationMeansQuery(t *testing.T) {
+	ops, err := pagedOperations(spec(t, strings.NewReplacer(
+		"- {name: after, in: query, schema: {type: string}}",
+		"- {name: page_token, in: query, schema: {type: string}}",
+		"      operationId: listThings",
+		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token}\n        next: /nextCursor",
+	).Replace(oneArray)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 || ops[0].CursorParam != "page_token" {
+		t.Fatalf("got %+v, want one operation with cursor page_token", ops)
+	}
+}
+
+// A paged operation with no operationId would name a method Iter.
+func TestAPagedOperationNeedsAnOperationID(t *testing.T) {
+	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
+		"      operationId: listThings\n", "", 1)))
+	if err == nil {
+		t.Fatal("a paged operation with no operationId was accepted")
+	}
+	if !strings.Contains(err.Error(), "operationId") {
+		t.Errorf("error does not say what is missing: %v", err)
+	}
+}
+
+// An array declared without items renders Page[] in Go, which does
+// not compile.
+func TestAnArrayWithoutItemsIsNotAPage(t *testing.T) {
+	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
+		"        things: {type: array, items: {$ref: '#/components/schemas/Thing'}}",
+		"        things: {type: array}", 1)))
+	if err == nil {
+		t.Fatal("an array with no items was accepted")
+	}
+	if !strings.Contains(err.Error(), "no array") {
+		t.Errorf("error does not say there is nothing to page over: %v", err)
+	}
+}
+
+// items has to name an array exactly; a prefix is a different field.
+func TestItemsDoesNotMatchOnAPrefix(t *testing.T) {
+	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
+		"      operationId: listThings",
+		"      operationId: listThings\n      x-oapi-clientgen-pagination: {items: /thing}", 1)))
+	if err == nil {
+		t.Fatal("items naming a prefix of an array was accepted")
+	}
+	if !strings.Contains(err.Error(), "thing") {
+		t.Errorf("error does not name what was asked for: %v", err)
 	}
 }

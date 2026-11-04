@@ -71,7 +71,7 @@ func runGoClient(t *testing.T) map[string]string {
 		// from the spec because this package does not read specs -
 		// that is generate's job, and its own tests cover it.
 		Paged: []apiclient.PagedOp{{
-			OperationID: "listThings", CursorParam: "after", CursorIn: "query",
+			OperationID: "listThings", CursorParam: "after",
 			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
 		}},
 	}

@@ -112,21 +112,29 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			// An override says the operation pages, so it is taken at
 			// its word and the field is checked rather than used to
 			// decide.
+			// An override says the operation pages, so a response that
+			// cannot be read is the author's mistake. The convention
+			// only guesses, so the same response means "not paged".
+			stated := op.Pagination != nil
+
 			schema, err := responseSchema(raw2, path, method)
 			if err != nil {
-				if op.Pagination == nil {
+				if !stated {
 					continue
 				}
 				return nil, fmt.Errorf("%s: %s", where, err)
 			}
 			if !hasProperty(schema, op.next()) {
-				if op.Pagination == nil {
+				if !stated {
 					continue
 				}
 				return nil, fmt.Errorf("%s: %s.next names %q, which is not a property of %s's response; it holds: %s",
 					where, extensionKey, op.next(), op.OperationID, propertyNames(schema))
 			}
 
+			// Past both halves, so this pages whether it said so or
+			// not, and an array nothing can pick out is an error
+			// either way.
 			items, err := resolveItems(raw2, schema, op, where)
 			if err != nil {
 				return nil, err
@@ -135,7 +143,6 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			out = append(out, apiclient.PagedOp{
 				OperationID: op.OperationID,
 				CursorParam: cursor.Name,
-				CursorIn:    cursor.In,
 				NextPath:    "/" + op.next(),
 				ItemsPath:   "/" + items.field,
 				ItemType:    items.itemType,

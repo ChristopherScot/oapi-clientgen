@@ -42,11 +42,10 @@ type PagedOp struct {
 	// generated wrapper is called.
 	OperationID string
 
-	// CursorParam is the parameter carrying the cursor and CursorIn
-	// where it goes: query for a GET, requestBody for a search whose
-	// filter is too big for a URL.
+	// CursorParam is the query parameter carrying the cursor. Both
+	// templates put it in the query string; a spec may say
+	// in: requestBody, and this generator does not render that.
 	CursorParam string
-	CursorIn    string
 
 	// NextPath locates the next cursor in the response and ItemsPath
 	// the array holding the page, both as paths rather than names: an
