@@ -1,0 +1,42 @@
+/* eslint-disable */
+{{ header `//` }}// Paging for the operations that page: one wrapper each, so a caller
+// writes no cursor loop and the field names carrying the cursor stay
+// in the spec rather than being recopied into every call site.
+//
+// The plain operation is still here and still takes the cursor. Reach
+// for it when the position has to outlive the loop - resuming a job
+// that died, serving one page per request, fanning pages out. An
+// iterator's state goes when its loop does.
+import { paged } from './paging{{ if .Published }}.ts{{ end }}'
+{{ range .Paged }}import { {{ .OperationID }} } from './generated/sdk.gen{{ if $.Published }}.ts{{ end }}'
+{{ end }}
+{{ range .Paged }}
+/**
+ * Walks every page of {{ .OperationID }}.
+ *
+ * A failure rejects, which `for await` routes to the caller's catch -
+ * where the Go client yields (zero, err) as a final element because a
+ * range loop has nowhere else to put one. Same guarantee, the shape
+ * each language expects. Breaking out stops fetching.
+ */
+export function {{ .OperationID }}Iter(
+  options?: Parameters<typeof {{ .OperationID }}<false>>[0],
+) {
+  return paged(async (cursor) => {
+    // throwOnError stays false, which is what fixes the shape of what
+    // comes back: with it true the result has no error property at
+    // all, and the union of the two is not narrowable.
+    const res = await {{ .OperationID }}<false>({
+      ...options,
+      query: { ...options?.query, {{ .CursorParam }}: cursor },
+    })
+    if (res.error !== undefined || res.data === undefined) {
+      throw res.error ?? new Error('{{ .OperationID }} returned no data')
+    }
+    return {
+      items: res.data{{ tsPath .ItemsPath }},
+      next: res.data{{ tsPath .NextPath }},
+    }
+  })
+}
+{{ end }}

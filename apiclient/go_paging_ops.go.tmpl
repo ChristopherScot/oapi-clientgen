@@ -1,0 +1,40 @@
+{{ header `//` }}
+package {{ .Package }}
+
+import (
+	"context"
+	"iter"
+)
+
+// Paging for the operations that page: one wrapper each, so a caller
+// writes no cursor loop and the field names carrying the cursor stay
+// in the spec rather than being recopied into every call site.
+//
+// The plain operation is still here and still takes the cursor. Reach
+// for it when the position has to outlive the loop - resuming a job
+// that died, serving one page per request, fanning pages out. An
+// iterator's state goes when its loop does.
+{{ range .Paged }}
+// {{ goName .OperationID }}Iter walks every page of {{ .OperationID }}.
+//
+// Yields an error exactly once, as its final element, and stops - so a
+// range loop that checks err and returns cannot silently process a
+// truncated list. Breaking out stops fetching.
+func (c *Client) {{ goName .OperationID }}Iter(ctx context.Context, params {{ goName .OperationID }}Params) iter.Seq2[{{ .ItemType }}, error] {
+	return Paged(ctx, func(ctx context.Context, cursor string) (Page[{{ .ItemType }}], error) {
+		// params is the closure's own copy, so overwriting the cursor
+		// each page leaves the caller's untouched.
+		if cursor != "" {
+			params.{{ goName .CursorParam }} = NewOptString(cursor)
+		}
+		res, err := c.{{ goName .OperationID }}(ctx, params)
+		if err != nil {
+			return Page[{{ .ItemType }}]{}, err
+		}
+		return Page[{{ .ItemType }}]{
+			Items: res{{ goPath .ItemsPath }},
+			Next:  res{{ goPath .NextPath }}.Or(""),
+		}, nil
+	})
+}
+{{ end }}

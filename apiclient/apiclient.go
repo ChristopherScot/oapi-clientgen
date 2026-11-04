@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+	"unicode"
 )
 
 //go:embed *.tmpl
@@ -27,6 +28,35 @@ var templates embed.FS
 type File struct {
 	Path string
 	Body string
+}
+
+// PagedOp is one operation the spec says pages, resolved against the
+// document that declared it.
+//
+// The names arrive resolved rather than assumed. after/nextCursor is
+// the convention and most operations say nothing, but an API that
+// chose page_token/next_page_token is ordinary and the generated
+// wrapper has to use its words, not ours.
+type PagedOp struct {
+	// OperationID is what the spec calls it, which decides what the
+	// generated wrapper is called.
+	OperationID string
+
+	// CursorParam is the query parameter carrying the cursor. Both
+	// templates put it in the query string; a spec may say
+	// in: requestBody, and this generator does not render that.
+	CursorParam string
+
+	// NextPath locates the next cursor in the response and ItemsPath
+	// the array holding the page, both as paths rather than names: an
+	// API answering {meta: {nextCursor}} is ordinary, and a name
+	// could not say so.
+	NextPath  string
+	ItemsPath string
+
+	// ItemType is what one element is called in the generated code,
+	// resolved from the array's schema.
+	ItemType string
 }
 
 // Params is everything the client templates need, and nothing else.
@@ -52,6 +82,14 @@ type Params struct {
 	// ogen's NewClient take a SecuritySource before its options. The
 	// generated constructor has to match that signature.
 	HasSecurity bool
+
+	// Paged are the operations the spec says page, in operationId
+	// order. Empty for a spec where none do, which is most of them.
+	//
+	// The only per-OPERATION data here: everything else describes the
+	// client as a whole, which is why the templates could ignore the
+	// document until now.
+	Paged []PagedOp
 
 	// Published says this client ships as an npm package owning its
 	// own tsconfig, which decides two things.
@@ -83,6 +121,9 @@ func renderWith(name string, p Params, d SharedDefaults) (string, error) {
 		"parityCases": func() []string { return parityCases },
 		"defaults":    func() SharedDefaults { return d },
 		"verdicts":    func() VerdictWords { return verdictVocabulary },
+		"goName":      goName,
+		"goPath":      goPath,
+		"tsPath":      tsPath,
 	}).Parse(string(b))
 	if err != nil {
 		return "", fmt.Errorf("apiclient: parsing %s: %w", name, err)
@@ -94,21 +135,68 @@ func renderWith(name string, p Params, d SharedDefaults) (string, error) {
 	return buf.String(), nil
 }
 
+// goName is an operationId as ogen exports it: listPokemon becomes
+// ListPokemon. ogen only upper-cases the first rune, so neither does
+// this - a divergence would name a method that is not there.
+func goName(operationID string) string {
+	if operationID == "" {
+		return ""
+	}
+	r := []rune(operationID)
+	return string(unicode.ToUpper(r[0])) + string(r[1:])
+}
+
+// goPath turns a JSON Pointer into the Go field accesses that reach
+// the same value: /meta/nextCursor becomes .Meta.NextCursor, because
+// ogen exports every field.
+func goPath(pointer string) string { return fieldPath(pointer, goName) }
+
+// tsPath is the same for TypeScript, where hey-api keeps the spec's
+// own spelling: /meta/nextCursor stays .meta.nextCursor.
+func tsPath(pointer string) string {
+	return fieldPath(pointer, func(s string) string { return s })
+}
+
+func fieldPath(pointer string, name func(string) string) string {
+	var b strings.Builder
+	for _, part := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		if part == "" {
+			continue
+		}
+		b.WriteString("." + name(part))
+	}
+	return b.String()
+}
+
 // templateFile is a template and where its output goes.
-type templateFile struct{ tmpl, path string }
+type templateFile struct {
+	tmpl, path string
+
+	// when decides whether the file is written at all. Nil means
+	// always, which is every file but the paging wrappers: those
+	// exist only for the operations a spec says page, and a spec
+	// where none do should get no file rather than an empty one
+	// nobody can account for.
+	when func(Params) bool
+}
+
+// anyPaged reports whether the spec marked anything.
+func anyPaged(p Params) bool { return len(p.Paged) > 0 }
 
 // These lists are the one inventory of what each client is made of.
 // A consumer decides WHERE they go; what they ARE is decided here, so
 // adding a file does not mean remembering a second list.
 var tsFiles = []templateFile{
-	{"ts_resilience.ts.tmpl", "resilience.ts"},
-	{"ts_paging.ts.tmpl", "paging.ts"},
-	{"ts_index.ts.tmpl", "index.ts"},
+	{tmpl: "ts_resilience.ts.tmpl", path: "resilience.ts"},
+	{tmpl: "ts_paging.ts.tmpl", path: "paging.ts"},
+	{tmpl: "ts_paging_ops.ts.tmpl", path: "paging_ops.ts", when: anyPaged},
+	{tmpl: "ts_index.ts.tmpl", path: "index.ts"},
 }
 
 var goFiles = []templateFile{
-	{"go_client.go.tmpl", "client.go"},
-	{"go_paging.go.tmpl", "paging.go"},
+	{tmpl: "go_client.go.tmpl", path: "client.go"},
+	{tmpl: "go_paging.go.tmpl", path: "paging.go"},
+	{tmpl: "go_paging_ops.go.tmpl", path: "paging_ops.go", when: anyPaged},
 }
 
 // tsTestFiles and goTestFiles are rendered by THIS repo's tests and
@@ -132,13 +220,13 @@ var goFiles = []templateFile{
 // this generator to one consumer's choice of runner, and the next
 // consumer's choice would be a second copy.
 var tsTestFiles = []templateFile{
-	{"ts_resilience_test.ts.tmpl", "resilience.test.ts"},
-	{"ts_paging_test.ts.tmpl", "paging.test.ts"},
+	{tmpl: "ts_resilience_test.ts.tmpl", path: "resilience.test.ts"},
+	{tmpl: "ts_paging_test.ts.tmpl", path: "paging.test.ts"},
 }
 
 var goTestFiles = []templateFile{
-	{"go_client_test.go.tmpl", "client_test.go"},
-	{"go_paging_test.go.tmpl", "paging_test.go"},
+	{tmpl: "go_client_test.go.tmpl", path: "client_test.go"},
+	{tmpl: "go_paging_test.go.tmpl", path: "paging_test.go"},
 }
 
 // TypeScript returns the files that sit beside a generated TypeScript
@@ -159,6 +247,9 @@ func GoTests(p Params) ([]File, error) { return files(goTestFiles, p) }
 func files(set []templateFile, p Params) ([]File, error) {
 	out := make([]File, 0, len(set))
 	for _, f := range set {
+		if f.when != nil && !f.when(p) {
+			continue
+		}
 		body, err := render(f.tmpl, p)
 		if err != nil {
 			return nil, err
