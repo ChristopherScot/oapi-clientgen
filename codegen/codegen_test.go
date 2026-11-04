@@ -53,6 +53,31 @@ func TestVendoredConfigPathsResolveFromTheHostApp(t *testing.T) {
 	}
 }
 
+// A published client's relative imports carry .ts, because its own
+// tsconfig rewrites them to .js on the way into dist. A vendored one
+// must not: .ts is TS5097 in a host repo that never opted into
+// allowImportingTsExtensions.
+//
+// The two configs are near enough alike to reach for the wrong one,
+// and reaching for the vendored one on a published client stripped
+// the extensions and would have shipped a package whose imports
+// resolve to nothing.
+func TestOnlyThePublishedConfigKeepsTSExtensions(t *testing.T) {
+	if !strings.Contains(HeyAPIConfigAtRoot("../../openapi.yml"), "importFileExtension: 'ts'") {
+		t.Error("the published config dropped importFileExtension; its relative imports " +
+			"lose .ts and tsc cannot rewrite them into dist/")
+	}
+
+	_, vendored, err := HeyAPIConfigNestedIn(t.TempDir(), "openapi.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(vendored, "importFileExtension") {
+		t.Error("the vendored config gained importFileExtension; .ts is TS5097 in a " +
+			"host repo that did not ask for it")
+	}
+}
+
 // The scaffolded client keeps RELATIVE paths - the file is committed
 // and read on other machines - and they work because npx stops at the
 // client's own package.json.
