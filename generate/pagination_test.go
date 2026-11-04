@@ -21,6 +21,20 @@ func spec(t *testing.T, body string) string {
 	return path
 }
 
+// variant edits the fixture and fails if an edit matched nothing: a
+// strings.Replace that misses silently tests the unmodified spec, and
+// passes for the wrong reason.
+func variant(t *testing.T, base string, pairs ...string) string {
+	t.Helper()
+	for i := 0; i < len(pairs); i += 2 {
+		if !strings.Contains(base, pairs[i]) {
+			t.Fatalf("fixture does not contain %q", pairs[i])
+		}
+		base = strings.Replace(base, pairs[i], pairs[i+1], 1)
+	}
+	return base
+}
+
 const oneArray = `
 openapi: 3.0.0
 info: {title: probe, version: 1.0.0}
@@ -66,9 +80,9 @@ func TestTheConventionNeedsNoExtension(t *testing.T) {
 
 // Most operations do not page and must produce nothing, not an error.
 func TestAnOperationWithoutTheParameterIsNotPaged(t *testing.T) {
-	ops, err := pagedOperations(spec(t, strings.Replace(oneArray,
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
 		"- {name: after, in: query, schema: {type: string}}",
-		"- {name: limit, in: query, schema: {type: integer}}", 1)))
+		"- {name: limit, in: query, schema: {type: integer}}")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,9 +94,9 @@ func TestAnOperationWithoutTheParameterIsNotPaged(t *testing.T) {
 // Two arrays and no items: refuse rather than page the wrong one. A
 // guess here compiles and reads the wrong collection.
 func TestTwoArraysWithoutItemsIsRefused(t *testing.T) {
-	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"        nextCursor: {type: string}",
-		"        learnedBy: {type: array, items: {$ref: '#/components/schemas/Thing'}}\n        nextCursor: {type: string}", 1)))
+		"        learnedBy: {type: array, items: {$ref: '#/components/schemas/Thing'}}\n        nextCursor: {type: string}")))
 	if err == nil {
 		t.Fatal("two arrays and no items was accepted")
 	}
@@ -95,12 +109,12 @@ func TestTwoArraysWithoutItemsIsRefused(t *testing.T) {
 
 // Named, the ambiguity is gone.
 func TestItemsResolvesTheAmbiguity(t *testing.T) {
-	ops, err := pagedOperations(spec(t, strings.NewReplacer(
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
 		"        nextCursor: {type: string}",
 		"        learnedBy: {type: array, items: {$ref: '#/components/schemas/Thing'}}\n        nextCursor: {type: string}",
 		"      operationId: listThings",
 		"      operationId: listThings\n      x-oapi-clientgen-pagination: {items: /things}",
-	).Replace(oneArray)))
+	)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,9 +126,9 @@ func TestItemsResolvesTheAmbiguity(t *testing.T) {
 // A cursor the operation does not declare is caught here rather than
 // in the consumer's build.
 func TestACursorThatIsNotAParameterIsRefused(t *testing.T) {
-	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {cursor: {name: page_token, in: query}}", 1)))
+		"      operationId: listThings\n      x-oapi-clientgen-pagination: {cursor: {name: page_token, in: query}}")))
 	if err == nil {
 		t.Fatal("a cursor naming no declared parameter was accepted")
 	}
@@ -125,14 +139,14 @@ func TestACursorThatIsNotAParameterIsRefused(t *testing.T) {
 
 // A vendor's names, stated once, with no convention anywhere.
 func TestAnOverrideReplacesTheConvention(t *testing.T) {
-	ops, err := pagedOperations(spec(t, strings.NewReplacer(
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
 		"- {name: after, in: query, schema: {type: string}}",
 		"- {name: page_token, in: query, schema: {type: string}}",
 		"        nextCursor: {type: string}",
 		"        next_page_token: {type: string}",
 		"      operationId: listThings",
 		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token, in: query}\n        next: /next_page_token",
-	).Replace(oneArray)))
+	)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +162,8 @@ func TestAnOverrideReplacesTheConvention(t *testing.T) {
 // answering with a cursor is not paging, and generating a wrapper for
 // it would read a field that is not there.
 func TestAfterWithoutACursorFieldIsNotPaged(t *testing.T) {
-	ops, err := pagedOperations(spec(t, strings.Replace(oneArray,
-		"        nextCursor: {type: string}", "        updatedAt: {type: string}", 1)))
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
+		"        nextCursor: {type: string}", "        updatedAt: {type: string}")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,11 +175,11 @@ func TestAfterWithoutACursorFieldIsNotPaged(t *testing.T) {
 // An override says it pages, so a next naming nothing is an error
 // rather than a silent skip - the author meant it and got it wrong.
 func TestAnOverrideNamingNoFieldIsRefused(t *testing.T) {
-	_, err := pagedOperations(spec(t, strings.NewReplacer(
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"        nextCursor: {type: string}", "        updatedAt: {type: string}",
 		"      operationId: listThings",
 		"      operationId: listThings\n      x-oapi-clientgen-pagination: {next: /nextCursor}",
-	).Replace(oneArray)))
+	)))
 	if err == nil {
 		t.Fatal("a next naming no response field was accepted")
 	}
@@ -223,9 +237,9 @@ func TestNoPagedOperationsMeansNoFile(t *testing.T) {
 // location: the name alone would match a date filter passed as a
 // header and generate a query parameter the operation cannot read.
 func TestAfterSomewhereOtherThanTheQueryIsNotTheCursor(t *testing.T) {
-	ops, err := pagedOperations(spec(t, strings.Replace(oneArray,
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
 		"- {name: after, in: query, schema: {type: string}}",
-		"- {name: after, in: header, schema: {type: string}}", 1)))
+		"- {name: after, in: header, schema: {type: string}}")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,12 +251,12 @@ func TestAfterSomewhereOtherThanTheQueryIsNotTheCursor(t *testing.T) {
 // The override matches on location too, so naming a parameter that
 // exists somewhere else is still wrong.
 func TestAnOverrideMatchesTheLocationAsWell(t *testing.T) {
-	_, err := pagedOperations(spec(t, strings.NewReplacer(
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"- {name: after, in: query, schema: {type: string}}",
 		"- {name: page_token, in: header, schema: {type: string}}",
 		"      operationId: listThings",
 		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token, in: query}\n        next: /nextCursor",
-	).Replace(oneArray)))
+	)))
 	if err == nil {
 		t.Fatal("a cursor naming a header as though it were a query parameter was accepted")
 	}
@@ -254,12 +268,12 @@ func TestAnOverrideMatchesTheLocationAsWell(t *testing.T) {
 // in defaults to query, which is the whole point of letting it be
 // omitted.
 func TestAnOverrideWithoutALocationMeansQuery(t *testing.T) {
-	ops, err := pagedOperations(spec(t, strings.NewReplacer(
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
 		"- {name: after, in: query, schema: {type: string}}",
 		"- {name: page_token, in: query, schema: {type: string}}",
 		"      operationId: listThings",
 		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token}\n        next: /nextCursor",
-	).Replace(oneArray)))
+	)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,8 +284,8 @@ func TestAnOverrideWithoutALocationMeansQuery(t *testing.T) {
 
 // A paged operation with no operationId would name a method Iter.
 func TestAPagedOperationNeedsAnOperationID(t *testing.T) {
-	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
-		"      operationId: listThings\n", "", 1)))
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
+		"      operationId: listThings\n", "")))
 	if err == nil {
 		t.Fatal("a paged operation with no operationId was accepted")
 	}
@@ -283,9 +297,9 @@ func TestAPagedOperationNeedsAnOperationID(t *testing.T) {
 // An array declared without items renders Page[] in Go, which does
 // not compile.
 func TestAnArrayWithoutItemsIsNotAPage(t *testing.T) {
-	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"        things: {type: array, items: {$ref: '#/components/schemas/Thing'}}",
-		"        things: {type: array}", 1)))
+		"        things: {type: array}")))
 	if err == nil {
 		t.Fatal("an array with no items was accepted")
 	}
@@ -296,13 +310,49 @@ func TestAnArrayWithoutItemsIsNotAPage(t *testing.T) {
 
 // items has to name an array exactly; a prefix is a different field.
 func TestItemsDoesNotMatchOnAPrefix(t *testing.T) {
-	_, err := pagedOperations(spec(t, strings.Replace(oneArray,
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {items: /thing}", 1)))
+		"      operationId: listThings\n      x-oapi-clientgen-pagination: {items: /thing}")))
 	if err == nil {
 		t.Fatal("items naming a prefix of an array was accepted")
 	}
 	if !strings.Contains(err.Error(), "thing") {
 		t.Errorf("error does not name what was asked for: %v", err)
+	}
+}
+
+// next and items are pointers, not names, because an API answering
+// {meta: {nextCursor}} is ordinary. goPath and tsPath have always
+// rendered the nested access; nothing checked the reader accepted it.
+func TestANestedCursorResolves(t *testing.T) {
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
+		"        nextCursor: {type: string}",
+		"        meta: {type: object, properties: {nextCursor: {type: string}}}",
+		"      operationId: listThings",
+		"      operationId: listThings\n      x-oapi-clientgen-pagination: {next: /meta/nextCursor}",
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 || ops[0].NextPath != "/meta/nextCursor" {
+		t.Fatalf("got %+v, want one operation with next /meta/nextCursor", ops)
+	}
+}
+
+// The walk has to reach the end of the pointer: a next naming
+// /meta/nextCursor against a meta that holds something else is wrong,
+// and checking only the first segment would accept it.
+func TestANestedCursorMustExistAllTheWayDown(t *testing.T) {
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
+		"        nextCursor: {type: string}",
+		"        meta: {type: object, properties: {total: {type: integer}}}",
+		"      operationId: listThings",
+		"      operationId: listThings\n      x-oapi-clientgen-pagination: {next: /meta/nextCursor}",
+	)))
+	if err == nil {
+		t.Fatal("a next naming a field nested under the wrong parent was accepted")
+	}
+	if !strings.Contains(err.Error(), "meta/nextCursor") {
+		t.Errorf("error does not name the pointer: %v", err)
 	}
 }

@@ -60,10 +60,9 @@ type specOperation struct {
 //
 // OpenAPI cannot say "this operation is paged" and the field names
 // vary by API, so a generator either guesses or is told. Every
-// commercial generator is told: Speakeasy reads x-speakeasy-pagination,
-// APIMatic x-pagination, Fern x-fern-pagination. This one is told too,
-// but briefly - the cursor names are a convention and the extension
-// exists for the parts a convention cannot cover.
+// commercial generator is told. This one is told too, but briefly -
+// the cursor names are a convention and the extension exists for the
+// parts a convention cannot cover.
 func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 	raw, err := os.ReadFile(specPath)
 	if err != nil {
@@ -124,7 +123,7 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 				}
 				return nil, fmt.Errorf("%s: %s", where, err)
 			}
-			if !hasProperty(schema, op.next()) {
+			if !hasProperty(raw2, schema, "/"+op.next()) {
 				if !stated {
 					continue
 				}
@@ -310,11 +309,20 @@ func itemTypeName(items map[string]any) string {
 	return t
 }
 
-// hasProperty reports whether the schema declares name.
-func hasProperty(schema map[string]any, name string) bool {
-	props, _ := schema["properties"].(map[string]any)
-	_, ok := props[name]
-	return ok
+// hasProperty reports whether the schema declares the property a
+// pointer names, following it through nested objects: an API
+// answering {meta: {nextCursor}} is ordinary, which is why next and
+// items are pointers rather than names.
+func hasProperty(doc map[string]any, schema map[string]any, pointer string) bool {
+	for _, part := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		props, _ := deref(doc, schema)["properties"].(map[string]any)
+		next, ok := props[part].(map[string]any)
+		if !ok {
+			return false
+		}
+		schema = next
+	}
+	return true
 }
 
 // propertyNames are the schema's properties, sorted, for an error that
