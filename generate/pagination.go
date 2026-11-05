@@ -131,6 +131,18 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 					where, extensionKey, op.next(), op.OperationID, propertyNames(schema))
 			}
 
+			// A required cursor cannot mean what a cursor means. Its
+			// absence is how a response says the collection ended, so
+			// a spec requiring it on every page has no way to say
+			// "no more" - and ogen renders a required string as a
+			// plain string, where the generated iterator reads an
+			// optional one. The client would not compile.
+			if requiredProperty(raw2, schema, "/"+op.next()) {
+				return nil, fmt.Errorf(
+					"%s: %s's response requires %q, so the last page cannot omit it - a cursor field has to be optional for its absence to mean the end of the collection",
+					where, op.OperationID, op.next())
+			}
+
 			// Past both halves, so this pages whether it said so or
 			// not, and an array nothing can pick out is an error
 			// either way.
@@ -323,6 +335,31 @@ func hasProperty(doc map[string]any, schema map[string]any, pointer string) bool
 		schema = next
 	}
 	return true
+}
+
+// requiredProperty reports whether the schema makes the property at
+// pointer required.
+//
+// Walks to the property's PARENT and asks that schema, because
+// required is a list on the object holding the property, not a flag
+// on the property itself.
+func requiredProperty(doc map[string]any, schema map[string]any, pointer string) bool {
+	parts := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	for _, part := range parts[:len(parts)-1] {
+		props, _ := deref(doc, schema)["properties"].(map[string]any)
+		next, ok := props[part].(map[string]any)
+		if !ok {
+			return false
+		}
+		schema = next
+	}
+	required, _ := deref(doc, schema)["required"].([]any)
+	for _, r := range required {
+		if name, _ := r.(string); name == parts[len(parts)-1] {
+			return true
+		}
+	}
+	return false
 }
 
 // propertyNames are the schema's properties, sorted, for an error that

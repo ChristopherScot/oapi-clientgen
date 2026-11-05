@@ -356,3 +356,39 @@ func TestANestedCursorMustExistAllTheWayDown(t *testing.T) {
 		t.Errorf("error does not name the pointer: %v", err)
 	}
 }
+
+// A required cursor field is refused, because it cannot mean what a
+// cursor means.
+//
+// Its absence is how a response says the collection ended, so a spec
+// requiring it on every page has no way to say "no more". ogen renders
+// a required string as a plain string where the iterator reads an
+// optional one, so accepting it hands the consumer a client that does
+// not compile - in a file whose header tells them not to edit it.
+func TestARequiredCursorIsRefused(t *testing.T) {
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
+		"      type: object\n      properties:",
+		"      type: object\n      required: [nextCursor]\n      properties:")))
+	if err == nil {
+		t.Fatal("a required nextCursor was accepted; the generated client would not compile")
+	}
+	for _, want := range []string{"listThings", "nextCursor", "optional"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// A field required somewhere OTHER than the cursor is none of this
+// check's business: items is required in plenty of real specs.
+func TestARequiredItemsArrayStillPages(t *testing.T) {
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
+		"      type: object\n      properties:",
+		"      type: object\n      required: [things]\n      properties:")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("ops = %+v, want the operation to page", ops)
+	}
+}
