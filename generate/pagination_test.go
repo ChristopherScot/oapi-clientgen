@@ -358,13 +358,8 @@ func TestANestedCursorMustExistAllTheWayDown(t *testing.T) {
 }
 
 // A required cursor field is refused, because it cannot mean what a
-// cursor means.
-//
-// Its absence is how a response says the collection ended, so a spec
-// requiring it on every page has no way to say "no more". ogen renders
-// a required string as a plain string where the iterator reads an
-// optional one, so accepting it hands the consumer a client that does
-// not compile - in a file whose header tells them not to edit it.
+// cursor means: its absence is how a response says the collection
+// ended.
 func TestARequiredCursorIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"      type: object\n      properties:",
@@ -385,6 +380,37 @@ func TestARequiredItemsArrayStillPages(t *testing.T) {
 	ops, err := pagedOperations(spec(t, variant(t, oneArray,
 		"      type: object\n      properties:",
 		"      type: object\n      required: [things]\n      properties:")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("ops = %+v, want the operation to page", ops)
+	}
+}
+
+// And the same for the cursor PARAMETER, where the contradiction
+// lands one request earlier: a required cursor leaves no way to ask
+// for the first page.
+func TestARequiredCursorParameterIsRefused(t *testing.T) {
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
+		"{name: after, in: query, schema: {type: string}}",
+		"{name: after, in: query, required: true, schema: {type: string}}")))
+	if err == nil {
+		t.Fatal("a required after was accepted; the generated client would not compile")
+	}
+	for _, want := range []string{"listThings", "after", "optional"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// A parameter required alongside an optional cursor is none of this
+// check's business.
+func TestAnotherRequiredParameterStillPages(t *testing.T) {
+	ops, err := pagedOperations(spec(t, variant(t, oneArray,
+		"        - {name: after, in: query, schema: {type: string}}",
+		"        - {name: after, in: query, schema: {type: string}}\n        - {name: team, in: query, required: true, schema: {type: string}}")))
 	if err != nil {
 		t.Fatal(err)
 	}

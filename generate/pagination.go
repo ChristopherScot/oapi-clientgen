@@ -30,8 +30,9 @@ const (
 const extensionKey = "x-oapi-clientgen-pagination"
 
 type specParam struct {
-	Name string `yaml:"name"`
-	In   string `yaml:"in"`
+	Name     string `yaml:"name"`
+	In       string `yaml:"in"`
+	Required bool   `yaml:"required"`
 }
 
 // specPagination is what an operation says when the convention does
@@ -96,6 +97,17 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			if !ok {
 				continue
 			}
+			// The same contradiction as a required response cursor,
+			// one request earlier: the FIRST call has no cursor to
+			// send, so requiring one leaves no way to ask for page
+			// one. ogen renders it as a plain string where the
+			// generated wrapper assigns an optional, so the client
+			// would not compile either.
+			if cursor.Required {
+				return nil, fmt.Errorf(
+					"%s: %s declares %q required, so the first page has no cursor to send - a cursor parameter has to be optional; drop it from the parameter's required field, or --patch it out of a spec you do not own",
+					where, op.OperationID, cursor.Name)
+			}
 			if op.OperationID == "" {
 				return nil, fmt.Errorf("%s: %s needs an operationId to name the generated method", where, extensionKey)
 			}
@@ -108,9 +120,6 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			// the consumer's build inside a file telling them not to
 			// edit it.
 			//
-			// An override says the operation pages, so it is taken at
-			// its word and the field is checked rather than used to
-			// decide.
 			// An override says the operation pages, so a response that
 			// cannot be read is the author's mistake. The convention
 			// only guesses, so the same response means "not paged".
@@ -137,9 +146,17 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			// "no more" - and ogen renders a required string as a
 			// plain string, where the generated iterator reads an
 			// optional one. The client would not compile.
+			//
+			// Refused rather than generated for, because a vendor
+			// whose last page sends an empty cursor instead would
+			// work: both templates stop on "". Supporting that means
+			// carrying optionality into PagedOp and branching the Go
+			// template on it. Worth doing when such a spec turns up
+			// and not before - a refusal can become support, where
+			// support cannot be withdrawn.
 			if requiredProperty(raw2, schema, "/"+op.next()) {
 				return nil, fmt.Errorf(
-					"%s: %s's response requires %q, so the last page cannot omit it - a cursor field has to be optional for its absence to mean the end of the collection",
+					"%s: %s's response requires %q, so the last page cannot omit it - a cursor field has to be optional for its absence to mean the end of the collection; drop it from the response schema's required list, or --patch it out of a spec you do not own",
 					where, op.OperationID, op.next())
 			}
 
