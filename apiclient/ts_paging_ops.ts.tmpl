@@ -20,7 +20,7 @@ import { paged } from './paging{{ if .Published }}.ts{{ end }}'
  * each language expects. Breaking out stops fetching.
  */
 export function {{ .OperationID }}Iter(
-  options?: Parameters<typeof {{ .OperationID }}<false>>[0],
+  options?: Parameters<typeof {{ .OperationID }}<false>>[0]
 ) {
   return paged(async (cursor) => {
     // throwOnError stays false, which is what fixes the shape of what
@@ -39,4 +39,4 @@ export function {{ .OperationID }}Iter(
     }
   })
 }
-{{ end }}
+{{- end }}

@@ -35,7 +35,7 @@ export type Fetch<T> = (cursor: string | undefined, signal?: AbortSignal) => Pro
  */
 export async function* paged<T>(
   fetch: Fetch<T>,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): AsyncGenerator<T, void, undefined> {
   let cursor: string | undefined
   const seen = new Set<string>()

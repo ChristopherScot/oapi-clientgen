@@ -218,3 +218,90 @@ const probeTSConfig = `{
   "include": ["*.ts", "generated/**/*.ts"]
 }
 `
+
+// Every rendered file ends in exactly one newline.
+//
+// A second one is a format error in every consumer whatever their
+// config, unlike the comma below - a {{ end }} on its own line leaves
+// the newline before it behind, which is what ts_index and
+// ts_paging_ops did.
+func TestRenderedTypeScriptEndsInOneNewline(t *testing.T) {
+	for _, f := range renderedTS(t) {
+		if !strings.HasSuffix(f.Body, "\n") {
+			t.Errorf("%s does not end in a newline", f.Path)
+		}
+		if strings.HasSuffix(f.Body, "\n\n") {
+			t.Errorf("%s ends in a blank line", f.Path)
+		}
+	}
+}
+
+// No parameter list ends in a trailing comma.
+//
+// ES5 has no such comma, so a project configuring its formatter for
+// es5 trailing commas - which biome's default is - reports every file
+// that carries one. The generated client is not the consumer's to
+// reformat: it carries a "do not edit" header, and the next
+// regeneration would put the comma back.
+//
+// Found in schoolhouse/app, where `yarn lint` failed on paging.ts for
+// exactly this, in a repo that had just adopted the generator.
+//
+// Checks the rendered output over every TypeScript template rather
+// than the three lines that were wrong, so a template added later is
+// covered when it is written.
+func TestNoTypeScriptParameterListEndsInAComma(t *testing.T) {
+	for _, f := range renderedTS(t) {
+		lines := strings.Split(f.Body, "\n")
+		for i, line := range lines {
+			if i+1 >= len(lines) || !strings.HasSuffix(strings.TrimSpace(line), ",") {
+				continue
+			}
+			// A parameter list, not an argument list: what follows
+			// the close paren is a return type or a function body.
+			// ES5 allows the comma in a CALL, and biome leaves those
+			// alone, so matching every ")" would fail on correct code.
+			next := strings.TrimSpace(lines[i+1])
+			if strings.HasPrefix(next, "):") || strings.HasPrefix(next, ") {") ||
+				strings.HasPrefix(next, ") =>") {
+				t.Errorf("%s:%d ends a parameter list with a comma:\n\t%s\n\t%s",
+					f.Path, i+1, strings.TrimSpace(line), next)
+			}
+		}
+	}
+}
+
+// renderedTS is every TypeScript file the templates write, client and
+// tests, for the checks that hold over all of them.
+//
+// Both with and without a paged operation. A spec with none - Zoom's,
+// for one - skips the {{ if .Paged }} blocks, and a template can be
+// wrong only on the path the other fixture never renders: that is how
+// a trailing blank line in index.ts survived a test that rendered
+// only the paged case.
+func renderedTS(t *testing.T) []apiclient.File {
+	t.Helper()
+	var out []apiclient.File
+	for _, paged := range [][]apiclient.PagedOp{
+		{{
+			OperationID: "listThings", CursorParam: "after",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
+		}},
+		nil,
+	} {
+		p := apiclient.Params{
+			Name: "probe", Version: "1.0.0", ImportPath: "probe-client",
+			Published: true, Paged: paged,
+		}
+		client, err := apiclient.TypeScript(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tests, err := apiclient.TypeScriptTests(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append(client, tests...)...)
+	}
+	return out
+}
