@@ -111,10 +111,9 @@ func (g Generator) tsSelf(dir, specPath, staged, name, apiVersion string, opts S
 			return err
 		}
 
-		// Not codegen.HeyAPICommandIn, which builds an `sh -c "cd
-		// '<dir>' && ..."` for a caller that cannot set a working
-		// directory: a directory name holding a quote escapes that
-		// quoting. runIn sets cmd.Dir and execs argv directly.
+		// runIn sets cmd.Dir and execs argv directly, so the
+		// directory never passes through a shell - a name holding a
+		// quote would escape any quoting we did ourselves.
 		if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand("openapi-ts.config.ts", staged)...); err != nil {
 			return err
 		}
