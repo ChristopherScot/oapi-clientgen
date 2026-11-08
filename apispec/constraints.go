@@ -25,7 +25,7 @@ var constraintKeys = []string{
 	"pattern",
 }
 
-// AnnotateNode appends each schema's validation constraints to the
+// AnnotateNode appends a schema's validation constraints to the
 // description that carries it, so they arrive in the doc comment a
 // caller hovers. Reports how many descriptions it touched.
 //
@@ -52,8 +52,24 @@ func AnnotateNode(root *yaml.Node) int {
 		// Parameters shared by every method on the path.
 		touched += annotateParameters(item)
 	}
-	for _, schema := range mapValues(child(child(doc, "components"), "schemas")) {
+	// The same positions again under components, where a spec puts
+	// what it reuses. A $ref into components/schemas is documented
+	// because the walk reaches its target here; one into
+	// components/parameters would not be, which is why these are not
+	// only the inline cases.
+	components := child(doc, "components")
+	for _, schema := range mapValues(child(components, "schemas")) {
 		touched += annotateSchema(schema)
+	}
+	for _, key := range []string{"parameters", "headers"} {
+		for _, param := range mapValues(child(components, key)) {
+			touched += annotateParameter(param)
+		}
+	}
+	for _, key := range []string{"requestBodies", "responses"} {
+		for _, body := range mapValues(child(components, key)) {
+			touched += annotateContent(child(body, "content"))
+		}
 	}
 	return touched
 }
@@ -64,17 +80,23 @@ func AnnotateNode(root *yaml.Node) int {
 func annotateParameters(node *yaml.Node) int {
 	touched := 0
 	for _, param := range seqValues(child(node, "parameters")) {
-		schema := child(param, "schema")
-		if schema == nil {
-			continue
-		}
-		// The parameter's own description carries its schema's
-		// constraints; annotateChildren covers anything nested
-		// inside, without documenting the schema a second time.
-		touched += documentConstraints(param, schema)
-		touched += annotateChildren(schema)
+		touched += annotateParameter(param)
 	}
 	return touched
+}
+
+// annotateParameter documents one parameter or header, whose
+// description sits beside its schema rather than inside it.
+//
+// The description carries the schema's own constraints;
+// annotateChildren covers anything nested inside, without documenting
+// the schema a second time.
+func annotateParameter(param *yaml.Node) int {
+	schema := child(param, "schema")
+	if schema == nil {
+		return 0
+	}
+	return documentConstraints(param, schema) + annotateChildren(schema)
 }
 
 func annotateContent(content *yaml.Node) int {
@@ -148,15 +170,19 @@ func constraintText(schema *yaml.Node) string {
 	var parts []string
 	for _, key := range constraintKeys {
 		v := child(schema, key)
-		if v == nil {
+		// Scalars only. A mapping or sequence where a constraint
+		// belongs is not valid OpenAPI, and its Value is "" - which
+		// would render "maximum: " and document nothing.
+		if v == nil || v.Kind != yaml.ScalarNode {
 			continue
 		}
-		parts = append(parts, key+": "+scalar(key, v.Value))
+		parts = append(parts, key+": "+commentSafe(key, v.Value))
 	}
 	return strings.Join(parts, ", ")
 }
 
-// scalar renders a constraint's value the way the spec wrote it.
+// commentSafe is a constraint's value as the spec wrote it, less
+// anything that would break the comment it lands in.
 //
 // A regex may legally contain */, which ends a TypeScript block
 // comment early: tsc reports "TS1161: Unterminated regular expression
@@ -166,21 +192,39 @@ func constraintText(schema *yaml.Node) string {
 // Escaped to *\/ rather than split with an invisible character,
 // because \/ matches what / matches - a reader who copies the pattern
 // out of the comment gets one that still works.
-func scalar(key, value string) string {
+func commentSafe(key, value string) string {
 	if key == "pattern" {
 		return strings.ReplaceAll(value, "*/", `*\/`)
 	}
 	return value
 }
 
+// resolve follows an alias to the node it names.
+//
+// A spec that defines a schema once with an anchor and uses it by
+// alias holds an AliasNode where a mapping is expected, which every
+// accessor below would otherwise skip - documenting the constraint on
+// whichever use the walk met first, or on none of them when the
+// anchor sits somewhere the walk does not go.
+//
+// Visiting a shared node twice is safe: documentConstraints finds its
+// own text already there and writes nothing.
+func resolve(n *yaml.Node) *yaml.Node {
+	for n != nil && n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	return n
+}
+
 // child is the value of key in a mapping node, or nil.
 func child(n *yaml.Node, key string) *yaml.Node {
+	n = resolve(n)
 	if n == nil || n.Kind != yaml.MappingNode {
 		return nil
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		if n.Content[i].Value == key {
-			return n.Content[i+1]
+			return resolve(n.Content[i+1])
 		}
 	}
 	return nil
@@ -188,28 +232,38 @@ func child(n *yaml.Node, key string) *yaml.Node {
 
 // mapValues are a mapping node's values.
 func mapValues(n *yaml.Node) []*yaml.Node {
+	n = resolve(n)
 	if n == nil || n.Kind != yaml.MappingNode {
 		return nil
 	}
 	out := make([]*yaml.Node, 0, len(n.Content)/2)
-	for i := 1; i < len(n.Content); i += 2 {
-		out = append(out, n.Content[i])
+	// i+1 < len, like the accessors around it: a mapping the parser
+	// built always has an even Content, and a hand-built one with a
+	// dangling key would otherwise come back as a value.
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		out = append(out, resolve(n.Content[i+1]))
 	}
 	return out
 }
 
 // seqValues are a sequence node's elements.
 func seqValues(n *yaml.Node) []*yaml.Node {
+	n = resolve(n)
 	if n == nil || n.Kind != yaml.SequenceNode {
 		return nil
 	}
-	return n.Content
+	out := make([]*yaml.Node, 0, len(n.Content))
+	for _, c := range n.Content {
+		out = append(out, resolve(c))
+	}
+	return out
 }
 
 // setString writes key on a mapping node, in place when it is already
 // there and appended when it is not, so the keys around it keep their
 // order.
 func setString(n *yaml.Node, key, value string) {
+	n = resolve(n)
 	if n == nil || n.Kind != yaml.MappingNode {
 		return
 	}

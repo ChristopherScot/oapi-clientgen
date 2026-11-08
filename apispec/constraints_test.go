@@ -248,3 +248,84 @@ components:
 		}
 	}
 }
+
+// A schema is documented wherever a spec puts it, not only inline.
+//
+// components holds what a spec reuses, and a $ref into it is how an
+// operation reaches that. Walking only the inline positions documents
+// a $ref into components/schemas - because the walk meets the target
+// there - and silently skips one into components/parameters, with no
+// error and no change in the count reported.
+func TestEveryComponentPositionIsReached(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"parameters", `
+components:
+  parameters:
+    Limit: {name: limit, in: query, schema: {type: integer, maximum: 50}}
+`},
+		{"headers", `
+components:
+  headers:
+    XRate: {schema: {type: integer, maximum: 9}}
+`},
+		{"responses", `
+components:
+  responses:
+    Page:
+      description: ok
+      content: {application/json: {schema: {type: string, maxLength: 4}}}
+`},
+		{"requestBodies", `
+components:
+  requestBodies:
+    Body:
+      content: {application/json: {schema: {type: string, maxLength: 4}}}
+`},
+		{"schemas", `
+components:
+  schemas:
+    Thing: {type: string, maxLength: 4}
+`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if n := apispec.AnnotateNode(decode(t, tc.body)); n != 1 {
+				t.Errorf("annotated %d under components/%s, want 1", n, tc.name)
+			}
+		})
+	}
+}
+
+// A schema reached by alias is documented like any other.
+//
+// A spec that declares a shape once with an anchor holds an AliasNode
+// where a mapping is expected. Skipping those documents whichever use
+// the walk met first - or none of them, when the anchor sits outside
+// the positions walked.
+func TestAnAliasedSchemaIsDocumented(t *testing.T) {
+	t.Run("shared by two parameters", func(t *testing.T) {
+		doc := decode(t, `
+paths:
+  /things:
+    get:
+      parameters:
+        - {name: slug, in: query, description: One., schema: &s {type: string, maxLength: 30}}
+        - {name: other, in: query, description: Two., schema: *s}
+`)
+		if n := apispec.AnnotateNode(doc); n != 2 {
+			t.Errorf("annotated %d parameters, want both", n)
+		}
+	})
+
+	t.Run("anchored outside the walk", func(t *testing.T) {
+		doc := decode(t, `
+x-common:
+  slug: &slug {type: string, maxLength: 30}
+components:
+  schemas:
+    Thing: *slug
+`)
+		if n := apispec.AnnotateNode(doc); n != 1 {
+			t.Errorf("annotated %d, want the aliased schema", n)
+		}
+	})
+}

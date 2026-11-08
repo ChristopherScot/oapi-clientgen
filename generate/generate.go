@@ -300,7 +300,7 @@ func (g Generator) generateTSClient(dir, name, apiVersion string, c Client, spec
 	}
 	defer os.Remove(cfgPath)
 
-	if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand(cfgPath)...); err != nil {
+	if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand(cfgPath, specPath)...); err != nil {
 		return err
 	}
 	// Mark the generator's output before the hand-written half goes
