@@ -1,5 +1,6 @@
-v0.0.8
+v0.0.9
 
+v0.0.9 A spec's constraints reach the doc comment a caller hovers
 v0.0.8 Generates from a spec a service owns, and pages it
 v0.0.7 The circuit breaker opens on a failure rate, not a run of failures
 v0.0.6 A TypeScript caller can supply the fetch under the resilience
