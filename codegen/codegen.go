@@ -66,13 +66,23 @@ func Swagger2OpenAPICommand(in, out string) []string {
 // both are provisioned with -p. -f names the config because npx
 // chdirs to the nearest package.json, where hey-api's own search
 // would otherwise start.
-func HeyAPICommand(configPath string) []string {
-	return []string{
+//
+// specPath, when given, is read instead of the input the config
+// names, and -i wins over it. That lets the config keep a path a
+// reader can follow while the generator reads one it wrote - and the
+// config stays byte-identical on every machine, which is what the
+// staleness check in CI compares.
+func HeyAPICommand(configPath string, specPath ...string) []string {
+	argv := []string{
 		"npx", "--yes",
 		"-p", "@hey-api/openapi-ts@" + HeyAPIVersion,
 		"-p", "typescript@" + TypescriptVersion,
 		"openapi-ts", "-f", configPath,
 	}
+	for _, spec := range specPath {
+		argv = append(argv, "-i", spec)
+	}
+	return argv
 }
 
 // HeyAPICommandIn runs the generator for a client at its own package

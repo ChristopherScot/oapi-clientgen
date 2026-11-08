@@ -49,12 +49,23 @@ func (g Generator) Self(dir, specPath string, opts SelfOptions) error {
 		name = PackageFromDir(opts.GoOut)
 	}
 
+	// Staged, so the generators read the spec with its constraints
+	// documented rather than the one on disk. Everything below reads
+	// the staged path - the wrappers too, or they would resolve
+	// paging and security from different bytes than the client they
+	// wrap was generated from.
+	staged, cleanup, err := stageSpec(raw, name, g.logf)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	if !opts.SupportOnly {
-		if err := g.runOgenForSelf(dir, specPath, opts); err != nil {
+		if err := g.runOgenForSelf(dir, staged, opts); err != nil {
 			return err
 		}
 	}
-	if err := g.goWrapper(filepath.Join(dir, opts.GoOut), filepath.Join(dir, specPath), name, opts.Package, apiVersion); err != nil {
+	if err := g.goWrapper(filepath.Join(dir, opts.GoOut), staged, name, opts.Package, apiVersion); err != nil {
 		return err
 	}
 
@@ -64,13 +75,19 @@ func (g Generator) Self(dir, specPath string, opts SelfOptions) error {
 	if opts.TSOut == "" {
 		return nil
 	}
-	return g.tsSelf(dir, specPath, name, apiVersion, opts)
+	return g.tsSelf(dir, specPath, staged, name, apiVersion, opts)
 }
 
 // tsSelf generates and wraps the published TypeScript client, which
 // is built at its own package root rather than vendored into the
 // repo that generated it.
-func (g Generator) tsSelf(dir, specPath, name, apiVersion string, opts SelfOptions) error {
+// specPath is what the committed config names - a path beside the
+// client, which every machine resolves the same way. staged is what
+// hey-api actually reads, passed with -i, which wins over the
+// config's input. Keeping them apart is what lets the config carry a
+// path a reader can follow while the generator reads the documented
+// spec.
+func (g Generator) tsSelf(dir, specPath, staged, name, apiVersion string, opts SelfOptions) error {
 	out := filepath.Join(dir, opts.TSOut)
 	if !opts.SupportOnly {
 		// AtRoot, not NestedIn: this client is published, and a
@@ -98,14 +115,14 @@ func (g Generator) tsSelf(dir, specPath, name, apiVersion string, opts SelfOptio
 		// '<dir>' && ..."` for a caller that cannot set a working
 		// directory: a directory name holding a quote escapes that
 		// quoting. runIn sets cmd.Dir and execs argv directly.
-		if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand("openapi-ts.config.ts")...); err != nil {
+		if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand("openapi-ts.config.ts", staged)...); err != nil {
 			return err
 		}
 		if err := apiclient.MarkGenerated(filepath.Join(out, "generated")); err != nil {
 			return err
 		}
 	}
-	return g.tsSelfWrapper(out, filepath.Join(dir, specPath), name, apiVersion, opts)
+	return g.tsSelfWrapper(out, staged, name, apiVersion, opts)
 }
 
 // SelfOptions is what a service has to say that its spec does not.
@@ -162,7 +179,9 @@ type SelfOptions struct {
 // run, which is the bigger difference: there is one right answer for
 // every service built this way, and a file per service is a copy that
 // drifts.
-func (g Generator) runOgenForSelf(dir, specPath string, opts SelfOptions) error {
+// staged is read as given: it is the documented spec this run wrote,
+// not a path relative to the service.
+func (g Generator) runOgenForSelf(dir, staged string, opts SelfOptions) error {
 	out := filepath.Join(dir, opts.GoOut)
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", opts.GoOut, err)
@@ -187,7 +206,7 @@ func (g Generator) runOgenForSelf(dir, specPath string, opts SelfOptions) error 
 
 	// The resilience layer is written after ogen, so --clean does not
 	// take it.
-	argv := codegen.OgenArgv(cfg.Name(), out, pkg, filepath.Join(dir, specPath))
+	argv := codegen.OgenArgv(cfg.Name(), out, pkg, staged)
 	return runIn("generating the server and client for "+pkg, dir, argv...)
 }
 
