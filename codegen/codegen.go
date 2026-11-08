@@ -10,7 +10,6 @@ package codegen
 import (
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/ChristopherScot/oapi-clientgen/apiclient"
 )
@@ -66,28 +65,20 @@ func Swagger2OpenAPICommand(in, out string) []string {
 // both are provisioned with -p. -f names the config because npx
 // chdirs to the nearest package.json, where hey-api's own search
 // would otherwise start.
-func HeyAPICommand(configPath string) []string {
+//
+// specPath is read instead of the input the config names, because -i
+// wins over it. Passed by every caller, so the spec a client is
+// generated from is the one named here rather than whichever file the
+// config happens to point at - and a config that is committed can
+// keep a relative path a reader can follow, byte-identical on every
+// machine, which is what CI's staleness check compares.
+func HeyAPICommand(configPath, specPath string) []string {
 	return []string{
 		"npx", "--yes",
 		"-p", "@hey-api/openapi-ts@" + HeyAPIVersion,
 		"-p", "typescript@" + TypescriptVersion,
-		"openapi-ts", "-f", configPath,
+		"openapi-ts", "-f", configPath, "-i", specPath,
 	}
-}
-
-// HeyAPICommandIn runs the generator for a client at its own package
-// root, named relative to the service directory.
-//
-// Used by homelabctl, not by this tool: a client it scaffolds for a
-// service publishes to npm and owns its own tsconfig, where a client
-// generated from a third party's spec is vendored into a repo that
-// does not.
-//
-// The cd puts npx's search for a package.json inside the client
-// rather than the repo above it, which is what makes the committed
-// config's relative paths resolve correctly.
-func HeyAPICommandIn(dir string) []string {
-	return []string{"sh", "-c", "cd '" + dir + "' && " + strings.Join(HeyAPICommand("openapi-ts.config.ts"), " ")}
 }
 
 // A plain object rather than hey-api's defineConfig(): the generator
@@ -110,8 +101,7 @@ export default {
 }
 
 // HeyAPIConfigAtRoot is the config for a client at its own package
-// root, where npx lands in the client. Used by homelabctl; see
-// HeyAPICommandIn.
+// root, where npx lands in the client.
 //
 // Paths are relative because this file is committed and read on
 // machines that never saw the one that wrote it. Published, so

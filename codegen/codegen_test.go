@@ -98,28 +98,6 @@ func TestScaffoldedConfigPathsResolveFromTheClientItself(t *testing.T) {
 	}
 }
 
-// The argv the scaffolded path runs: the cd and the -f have to agree,
-// which is what a caller-built config path got wrong - it named
-// clients/ts/openapi-ts.config.ts from inside clients/ts.
-func TestScaffoldedCommandNamesAConfigItCanReach(t *testing.T) {
-	const dir = "clients/ts"
-	argv := HeyAPICommandIn(dir)
-
-	script := argv[len(argv)-1]
-	if !strings.Contains(script, "cd '"+dir+"'") {
-		t.Fatalf("no cd into the client: %s", script)
-	}
-
-	m := regexp.MustCompile(`-f (\S+)`).FindStringSubmatch(script)
-	if m == nil {
-		t.Fatalf("no -f: hey-api would search from npx's working directory\n%s", script)
-	}
-	// Resolved from where the cd leaves us.
-	if got := resolveFrom(filepath.Join("/repo/service", dir), m[1]); got != "/repo/service/clients/ts/openapi-ts.config.ts" {
-		t.Errorf("-f resolves to %s, which does not exist", got)
-	}
-}
-
 func resolveFrom(cwd, p string) string {
 	if filepath.IsAbs(p) {
 		return filepath.Clean(p)

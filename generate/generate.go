@@ -93,30 +93,23 @@ func (g Generator) Generate(dir, name string, c Client, refresh bool) error {
 		}
 	}
 
+	// Staged after patching, so a patch that changes a constraint is
+	// the one documented, and a patch written against the upstream
+	// text still matches - the appended lines are not there yet when
+	// it applies.
+	// Back to bytes for staging. A patched document has already lost
+	// its key order to the map apispec.Apply works on, so this path
+	// cannot preserve what the self path can - the generators have
+	// always seen a third-party spec this way.
 	patched, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("re-encoding patched spec: %w", err)
 	}
-
-	// A real file on disk, because both generators take a path.
-	tmp, err := os.CreateTemp("", "oapi-clientgen-"+name+"-*.json")
+	staged, cleanup, err := stageSpec(patched, name, g.logf)
 	if err != nil {
-		return fmt.Errorf("staging the patched spec: %w", err)
+		return err
 	}
-	// Close as well as Remove: Remove unlinks the path and leaves the
-	// descriptor open. Nothing useful to do if either fails.
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
-	if _, err := tmp.Write(patched); err != nil {
-		return fmt.Errorf("staging the patched spec: %w", err)
-	}
-	// Checked, unlike the deferred Close: a write can succeed and
-	// still fail to flush, handing the generator a truncated spec.
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("writing patched spec: %w", err)
-	}
+	defer cleanup()
 
 	// Client-Version reports the API version this client was generated
 	// against. A spec without one says "unknown" rather than claiming
@@ -135,11 +128,11 @@ func (g Generator) Generate(dir, name string, c Client, refresh bool) error {
 	for _, lang := range langs {
 		switch lang {
 		case "go":
-			if err := g.generateGoClient(dir, name, apiVersion, c, tmp.Name()); err != nil {
+			if err := g.generateGoClient(dir, name, apiVersion, c, staged); err != nil {
 				return err
 			}
 		case "ts":
-			if err := g.generateTSClient(dir, name, apiVersion, c, tmp.Name()); err != nil {
+			if err := g.generateTSClient(dir, name, apiVersion, c, staged); err != nil {
 				return err
 			}
 		default:
@@ -307,7 +300,7 @@ func (g Generator) generateTSClient(dir, name, apiVersion string, c Client, spec
 	}
 	defer os.Remove(cfgPath)
 
-	if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand(cfgPath)...); err != nil {
+	if err := runIn("generating the TypeScript client for "+name, out, codegen.HeyAPICommand(cfgPath, specPath)...); err != nil {
 		return err
 	}
 	// Mark the generator's output before the hand-written half goes

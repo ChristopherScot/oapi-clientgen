@@ -113,7 +113,7 @@ func runTSClient(t *testing.T) map[string]string {
 	// npx provisions hey-api and tsc into the same temporary install,
 	// so the client is generated and checked by the versions codegen
 	// pins rather than whatever the machine happens to have.
-	gen := codegen.HeyAPICommand("openapi-ts.config.ts")
+	gen := codegen.HeyAPICommand("openapi-ts.config.ts", "./openapi.yml")
 	mustRun(t, dir, gen[0], gen[1:]...)
 
 	// What node cannot do. The adapter calls createClient,
