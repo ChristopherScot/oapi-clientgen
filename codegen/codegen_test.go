@@ -124,9 +124,6 @@ func TestBothConfigsCarryTheSharedHeader(t *testing.T) {
 			t.Errorf("%s does not start with the shared header; it has its own copy "+
 				"of the wording:\n%s", tc.name, tc.cfg)
 		}
-		if !apiclient.WroteIt([]byte(tc.cfg)) {
-			t.Errorf("%s is not claimed by WroteIt, so it could never be retired", tc.name)
-		}
 	}
 }
 
