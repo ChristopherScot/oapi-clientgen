@@ -280,7 +280,7 @@ func TestNoTemplateWritesItsOwnHeader(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(body, []byte(GeneratedMarker)) {
+		if bytes.Contains(body, []byte(generatedMarker)) {
 			t.Errorf("%s writes the header itself; call {{ header `//` }} so the wording has one home",
 				e.Name())
 		}

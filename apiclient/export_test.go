@@ -27,3 +27,8 @@ func Verdicts() VerdictWords { return verdictVocabulary }
 // GoDuration is the millisecond-to-time.Duration rendering, for the
 // tests that check what the Go templates write.
 func GoDuration(ms int) string { return goDuration(ms) }
+
+// GeneratedMarker is the phrase every generated file carries, for the
+// test that checks each template wrote it. Here rather than in
+// apiclient.go because nothing outside the tests wants it.
+func GeneratedMarker() string { return generatedMarker }
