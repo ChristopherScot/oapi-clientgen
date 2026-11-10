@@ -149,14 +149,10 @@ func TestEveryRewrittenFileSaysItIsGenerated(t *testing.T) {
 			t.Fatalf("%s: no files", tc.lang)
 		}
 		for _, f := range files {
-			// WroteIt, not a substring: it is the same check that
-			// decides whether a retired file may be deleted, so
-			// asserting it here means a template cannot drift into a
-			// header that RemoveRetired will not recognise. Matching
-			// "Do not edit" loosely is what let that happen before.
-			if !WroteIt([]byte(f.Body)) {
-				t.Errorf("%s/%s does not say it is generated, but regen rewrites it", tc.lang, f.Path)
-			}
+			// The shared Header, not a loose match on "Do not edit":
+			// a template that grows its own copy of the wording
+			// drifts from every other file, and matching loosely is
+			// what let that happen before.
 			if !strings.HasPrefix(f.Body, Header("//")) &&
 				!strings.HasPrefix(f.Body, "/* eslint-disable */\n"+Header("//")) {
 				t.Errorf("%s/%s does not start with the shared header; it has its own copy of the wording:\n%s",
@@ -284,7 +280,7 @@ func TestNoTemplateWritesItsOwnHeader(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(body, []byte(generatedMarker)) {
+		if bytes.Contains(body, []byte(GeneratedMarker)) {
 			t.Errorf("%s writes the header itself; call {{ header `//` }} so the wording has one home",
 				e.Name())
 		}

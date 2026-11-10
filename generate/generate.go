@@ -444,7 +444,7 @@ func (g Generator) syncSupportFiles(out string, set func(apiclient.Params) ([]ap
 			return fmt.Errorf("writing %s: %w", f.Path, err)
 		}
 	}
-	removed, err := apiclient.RemoveRetired(out)
+	removed, err := apiclient.RemoveRetired(out, files)
 	if err != nil {
 		return err
 	}
