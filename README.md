@@ -97,6 +97,39 @@ Beside the generated operations:
 Both languages implement the same rules, and the generator's own tests
 render a client and run its suite to keep them honest.
 
+### Paged operations
+
+An operation that pages gets an iterator — `ListThingsIter` in Go,
+`listThingsIter` in TypeScript — that walks the pages, so no caller
+writes the cursor loop.
+
+Say so in the spec. OpenAPI has no way to express "this operation
+pages", so the generator is told rather than left to guess:
+
+```yaml
+paths:
+  /things:
+    get:
+      operationId: listThings
+      x-oapi-clientgen-pagination: {}
+```
+
+Empty is the whole declaration when the operation asks with an `after`
+query parameter and answers with a `nextCursor`. Three fields override
+that, one at a time:
+
+| | |
+|---|---|
+| `cursor` | the parameter carrying it — `{name: page_token, in: query}` |
+| `next` | where the next cursor is in the response — `/meta/next_page_token` |
+| `items` | which array is the page, required when the response holds more than one |
+
+**An operation without the key does not page**, whatever its parameters
+are called. Guessing from the names gave an iterator to anything with
+an `after` parameter and nothing to an API paging under other words,
+and both were silent. A marked operation the spec does not support is
+refused, naming what was looked for and what the spec actually has.
+
 ### Changing the defaults
 
 Anything you leave out keeps its default.

@@ -164,6 +164,7 @@ paths:
   /things:
     get:
       operationId: listThings
+      x-oapi-clientgen-pagination: {}
       parameters:
         - {name: after, in: query, schema: {type: string}}
       responses:
