@@ -96,8 +96,27 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 
 			// The marker is what says an operation pages. Unmarked
 			// is not paged, whatever its parameters are named.
+			//
+			// Absent and present-but-empty decode to the same nil,
+			// and they mean opposite things: `x-oapi-clientgen-
+			// pagination:` with nothing after the colon is YAML null,
+			// which an author writes believing they marked it. Taking
+			// that as unmarked is the silent miss this marker exists
+			// to remove, so the raw document decides which it was.
 			if op.Pagination == nil {
+				if markerIsNull(raw2, path, method) {
+					return nil, fmt.Errorf("%s: %s carries %s with no value, which says nothing - write `%s: {}` to page on the default names, or remove the key if it does not page",
+						where, op.OperationID, extensionKey, extensionKey)
+				}
 				continue
+			}
+
+			// Before anything that names the operation: every
+			// message below interpolates OperationID, and an empty
+			// one reads as a generator bug rather than a spec
+			// mistake.
+			if op.OperationID == "" {
+				return nil, fmt.Errorf("%s: this operation is marked as paging but has no operationId, which is what names the generated method - add one, or drop the marker if it does not page", where)
 			}
 
 			cursor, err := op.cursor(where)
@@ -115,16 +134,10 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 					"%s: %s declares %q required, so the first page has no cursor to send - a cursor parameter has to be optional; drop it from the parameter's required field, or --patch it out of a spec you do not own",
 					where, op.OperationID, cursor.Name)
 			}
-			if op.OperationID == "" {
-				return nil, fmt.Errorf("%s: %s needs an operationId to name the generated method", where, extensionKey)
-			}
-
-			// The other half of the convention. Taking a parameter
-			// called after is not enough on its own - after is a
-			// plausible date filter - and an operation that takes one
-			// without answering with a cursor would generate a
-			// wrapper reading a field that is not there, failing in
-			// the consumer's build inside a file telling them not to
+			// The cursor has to come back, too. An operation whose
+			// response does not carry one would generate a wrapper
+			// reading a field that is not there, failing in the
+			// consumer's build inside a file telling them not to
 			// edit it.
 			//
 			// Marked, so a response that cannot be read is the
@@ -137,7 +150,7 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 				named := op.Pagination.Next != ""
 				fix := fmt.Sprintf("set %s.next to the field that carries it", extensionKey)
 				if named {
-					fix = "name a field the response holds"
+					fix = fmt.Sprintf("point %s.next at a field the response holds", extensionKey)
 				}
 				return nil, fmt.Errorf("%s: %s is marked as paging, and its next cursor %q is not a property of its response; it holds: %s - %s, or drop the marker if it does not page",
 					where, op.OperationID, op.next(), propertyNames(schema), fix)
@@ -163,9 +176,8 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 					where, op.OperationID, op.next())
 			}
 
-			// Past both halves, so this pages whether it said so or
-			// not, and an array nothing can pick out is an error
-			// either way.
+			// Past both checks, so this pages; an array nothing can
+			// pick out is an error.
 			items, err := resolveItems(raw2, schema, op, where)
 			if err != nil {
 				return nil, err
@@ -189,9 +201,10 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 // defaulted to the convention's.
 //
 // Only called for a marked operation, so a parameter that is not there
-// is an error rather than a quiet "does not page". Both spellings of
-// the mistake reach the same message: naming the wrong parameter, and
-// leaving an operation on the convention that does not follow it.
+// is an error rather than a quiet "does not page". Naming the wrong
+// parameter and leaving a non-conforming operation on the default are
+// the same failure with different remedies, so the message carries the
+// advice for whichever half the author wrote.
 func (op specOperation) cursor(where string) (specParam, error) {
 	want := specParam{Name: cursorParam, In: "query"}
 	named := false
@@ -214,7 +227,7 @@ func (op specOperation) cursor(where string) (specParam, error) {
 	// Which half to correct depends on which one the author wrote.
 	fix := fmt.Sprintf("set %s.cursor to the parameter that carries it", extensionKey)
 	if named {
-		fix = "name a parameter the operation declares"
+		fix = fmt.Sprintf("point %s.cursor at a parameter the operation declares", extensionKey)
 	}
 	if len(declared) == 0 {
 		return specParam{}, fmt.Errorf("%s: %s is marked as paging with a cursor %q in %q, and declares no parameters at all - %s, or drop the marker if it does not page",
@@ -272,6 +285,17 @@ func resolveItems(doc map[string]any, schema map[string]any, op specOperation, w
 		return arrayProperty{}, fmt.Errorf("%s: %s's response holds %d arrays (%s), so %s.items has to say which is the page",
 			where, op.OperationID, len(arrays), fieldNames(arrays), extensionKey)
 	}
+}
+
+// markerIsNull reports whether the operation carries the extension key
+// with no value, which the typed decode cannot tell from its absence:
+// both leave the pointer nil.
+func markerIsNull(doc map[string]any, path, method string) bool {
+	paths, _ := doc["paths"].(map[string]any)
+	p, _ := paths[path].(map[string]any)
+	op, _ := p[method].(map[string]any)
+	v, present := op[extensionKey]
+	return present && v == nil
 }
 
 // responseSchema is the 200 response's JSON schema, $ref followed.

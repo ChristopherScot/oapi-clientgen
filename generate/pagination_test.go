@@ -87,7 +87,6 @@ func TestAnEmptyMarkerTakesTheConventionalNames(t *testing.T) {
 	}
 }
 
-// Most operations do not page and must produce nothing, not an error.
 // Nothing pages unless it says so.
 //
 // The spec here follows the convention exactly - an `after` query
@@ -119,14 +118,14 @@ func TestTheAdviceMatchesWhichHalfTheAuthorWrote(t *testing.T) {
 		{
 			name:    "named a cursor the operation does not declare",
 			marker:  "      x-oapi-clientgen-pagination: {cursor: {name: page_token}}",
-			want:    "name a parameter the operation declares",
+			want:    "point x-oapi-clientgen-pagination.cursor at a parameter",
 			notWant: "set x-oapi-clientgen-pagination.cursor",
 		},
 		{
 			name:    "left the cursor to the default, which does not fit",
 			marker:  "      x-oapi-clientgen-pagination: {}",
 			want:    "set x-oapi-clientgen-pagination.cursor",
-			notWant: "name a parameter the operation declares",
+			notWant: "point x-oapi-clientgen-pagination.cursor at a parameter",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -145,6 +144,23 @@ func TestTheAdviceMatchesWhichHalfTheAuthorWrote(t *testing.T) {
 				t.Errorf("advice is for the other half (%q): %v", c.notWant, err)
 			}
 		})
+	}
+}
+
+// A key with nothing after the colon is YAML null, which decodes to
+// the same nil as no key at all - and means the opposite. An author
+// writes it believing they marked the operation, so reading it as
+// unmarked is the silent miss this marker exists to remove.
+func TestAMarkerWithNoValueIsRefused(t *testing.T) {
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
+		unmarked, "      operationId: listThings\n      x-oapi-clientgen-pagination:")))
+	if err == nil {
+		t.Fatal("a marker with no value was read as unmarked, silently")
+	}
+	for _, want := range []string{"no value", "{}", "remove the key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
 	}
 }
 
