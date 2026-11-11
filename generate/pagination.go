@@ -185,12 +185,6 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 	return out, nil
 }
 
-// cursor reports the parameter carrying the cursor, and whether this
-// operation pages at all.
-//
-// An operation pages if it declares the convention's parameter or
-// names its own. Saying nothing and declaring nothing means it does
-// not page, which is most operations.
 // cursor is the parameter carrying the cursor, named by the marker or
 // defaulted to the convention's.
 //

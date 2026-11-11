@@ -21,14 +21,14 @@ func spec(t *testing.T, body string) string {
 	return path
 }
 
-// marked is the pair that turns the fixture's operation into a paged
-// one with nothing overridden, which is what most of these tests want.
-// Spelled as a pair rather than baked into oneArray so a test can mark
+// The search and replace that turn the fixture's operation into a
+// paged one with nothing overridden, which is what most of these tests
+// want. Constants rather than baked into oneArray so a test can mark
 // it differently - or leave it unmarked, which is its own case now.
-var marked = []string{
-	"      operationId: listThings",
-	"      operationId: listThings\n      x-oapi-clientgen-pagination: {}",
-}
+const (
+	unmarked = "      operationId: listThings"
+	withMark = "      operationId: listThings\n      x-oapi-clientgen-pagination: {}"
+)
 
 // variant edits the fixture and fails if an edit matched nothing: a
 // strings.Replace that misses silently tests the unmodified spec, and
@@ -68,10 +68,10 @@ components:
         nextCursor: {type: string}
 `
 
-// An operation saying nothing at all still pages, because it declares
-// the parameter the convention names.
-func TestTheConventionNeedsNoExtension(t *testing.T) {
-	ops, err := pagedOperations(spec(t, variant(t, oneArray, marked...)))
+// A marker with no fields is the whole declaration for an API using
+// the default names, so adopting it is one line rather than three.
+func TestAnEmptyMarkerTakesTheConventionalNames(t *testing.T) {
+	ops, err := pagedOperations(spec(t, variant(t, oneArray, unmarked, withMark)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,25 +105,52 @@ func TestAnUnmarkedOperationDoesNotPage(t *testing.T) {
 	}
 }
 
-// The marker alone is the whole declaration for an API that follows
-// the convention, so adopting it is one line rather than three.
-func TestAnEmptyMarkerTakesTheConventionalNames(t *testing.T) {
-	ops, err := pagedOperations(spec(t, variant(t, oneArray, marked...)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ops) != 1 {
-		t.Fatalf("found %d paged operations, want 1", len(ops))
-	}
-	got := ops[0]
-	if got.CursorParam != "after" || got.NextPath != "/nextCursor" {
-		t.Errorf("cursor=%s next=%s, want the convention's names", got.CursorParam, got.NextPath)
+// Naming a cursor that is not there and leaving a non-conforming
+// operation on the default are the same failure with different
+// remedies, so the message cannot offer one piece of advice.
+//
+// An author who named it needs a name the operation declares; one who
+// named nothing needs to start naming. Advice for the wrong half reads
+// as a suggestion to change what is already correct.
+func TestTheAdviceMatchesWhichHalfTheAuthorWrote(t *testing.T) {
+	for _, c := range []struct {
+		name, marker, want, notWant string
+	}{
+		{
+			name:    "named a cursor the operation does not declare",
+			marker:  "      x-oapi-clientgen-pagination: {cursor: {name: page_token}}",
+			want:    "name a parameter the operation declares",
+			notWant: "set x-oapi-clientgen-pagination.cursor",
+		},
+		{
+			name:    "left the cursor to the default, which does not fit",
+			marker:  "      x-oapi-clientgen-pagination: {}",
+			want:    "set x-oapi-clientgen-pagination.cursor",
+			notWant: "name a parameter the operation declares",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := pagedOperations(spec(t, variant(t, oneArray,
+				"      operationId: listThings",
+				"      operationId: listThings\n"+c.marker,
+				"- {name: after, in: query, schema: {type: string}}",
+				"- {name: limit, in: query, schema: {type: integer}}")))
+			if err == nil {
+				t.Fatal("a cursor the operation does not declare was accepted")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("advice is not %q: %v", c.want, err)
+			}
+			if strings.Contains(err.Error(), c.notWant) {
+				t.Errorf("advice is for the other half (%q): %v", c.notWant, err)
+			}
+		})
 	}
 }
 
 func TestMarkedWithoutTheCursorParameterIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"- {name: after, in: query, schema: {type: string}}",
 		"- {name: limit, in: query, schema: {type: integer}}")))
 	if err == nil {
@@ -143,7 +170,7 @@ func TestMarkedWithoutTheCursorParameterIsRefused(t *testing.T) {
 // guess here compiles and reads the wrong collection.
 func TestTwoArraysWithoutItemsIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"        nextCursor: {type: string}",
 		"        learnedBy: {type: array, items: {$ref: '#/components/schemas/Thing'}}\n        nextCursor: {type: string}")))
 	if err == nil {
@@ -207,12 +234,13 @@ func TestAnOverrideReplacesTheConvention(t *testing.T) {
 	}
 }
 
-// after on its own is a plausible date filter. Taking it without
-// answering with a cursor is not paging, and generating a wrapper for
-// it would read a field that is not there.
+// A marker is a claim about the response as well as the request. An
+// operation that says it pages but answers with no cursor would
+// generate a wrapper reading a field that is not there, so it is
+// refused here rather than in the consumer's build.
 func TestMarkedWithoutACursorFieldIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"        nextCursor: {type: string}", "        updatedAt: {type: string}")))
 	if err == nil {
 		t.Fatal("an operation marked as paging, whose response carries no cursor, was accepted")
@@ -247,7 +275,7 @@ func TestAnOverrideNamingNoFieldIsRefused(t *testing.T) {
 // render-and-compile harnesses in apiclient cover what the templates
 // then do with it, but nothing else checks that Params carries it.
 func TestWhatTheReaderFindsReachesTheTemplates(t *testing.T) {
-	ops, err := pagedOperations(spec(t, variant(t, oneArray, marked...)))
+	ops, err := pagedOperations(spec(t, variant(t, oneArray, unmarked, withMark)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,12 +316,12 @@ func TestNoPagedOperationsMeansNoFile(t *testing.T) {
 	}
 }
 
-// after in a header is not the cursor. The convention is a name AND a
-// location: the name alone would match a date filter passed as a
-// header and generate a query parameter the operation cannot read.
+// A parameter is a name AND a location, so after in a header is not
+// the cursor the default names mean. Matching on the name alone would
+// generate a query parameter the operation cannot read.
 func TestACursorOutsideTheQueryIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"- {name: after, in: query, schema: {type: string}}",
 		"- {name: after, in: header, schema: {type: string}}")))
 	if err == nil {
@@ -360,7 +388,7 @@ func TestAPagedOperationNeedsAnOperationID(t *testing.T) {
 // not compile.
 func TestAnArrayWithoutItemsIsNotAPage(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"        things: {type: array, items: {$ref: '#/components/schemas/Thing'}}",
 		"        things: {type: array}")))
 	if err == nil {
@@ -425,7 +453,7 @@ func TestANestedCursorMustExistAllTheWayDown(t *testing.T) {
 // ended.
 func TestARequiredCursorIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"      type: object\n      properties:",
 		"      type: object\n      required: [nextCursor]\n      properties:")))
 	if err == nil {
@@ -442,7 +470,7 @@ func TestARequiredCursorIsRefused(t *testing.T) {
 // check's business: items is required in plenty of real specs.
 func TestARequiredItemsArrayStillPages(t *testing.T) {
 	ops, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"      type: object\n      properties:",
 		"      type: object\n      required: [things]\n      properties:")))
 	if err != nil {
@@ -458,7 +486,7 @@ func TestARequiredItemsArrayStillPages(t *testing.T) {
 // for the first page.
 func TestARequiredCursorParameterIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"{name: after, in: query, schema: {type: string}}",
 		"{name: after, in: query, required: true, schema: {type: string}}")))
 	if err == nil {
@@ -475,7 +503,7 @@ func TestARequiredCursorParameterIsRefused(t *testing.T) {
 // check's business.
 func TestAnotherRequiredParameterStillPages(t *testing.T) {
 	ops, err := pagedOperations(spec(t, variant(t, oneArray,
-		marked[0], marked[1],
+		unmarked, withMark,
 		"        - {name: after, in: query, schema: {type: string}}",
 		"        - {name: after, in: query, schema: {type: string}}\n        - {name: team, in: query, required: true, schema: {type: string}}")))
 	if err != nil {
