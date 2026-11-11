@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
 )
 
 // Every shared number reaches both languages, and reaches them from

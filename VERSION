@@ -1,5 +1,6 @@
-v0.0.10
+v0.1.0
 
+v0.1.0 Renamed to oapi-gen: new module path, and an operation pages only if its spec says so
 v0.0.10 RemoveRetired takes a second argument: the files being written. Callers must pass them
 v0.0.9 A spec's constraints reach the doc comment a caller hovers
 v0.0.8 Generates from a spec a service owns, and pages it

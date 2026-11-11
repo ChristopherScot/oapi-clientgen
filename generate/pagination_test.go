@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
 )
 
 // spec writes a document and returns its path. Written per test rather
@@ -27,7 +27,7 @@ func spec(t *testing.T, body string) string {
 // it differently - or leave it unmarked, which is its own case now.
 const (
 	unmarked = "      operationId: listThings"
-	withMark = "      operationId: listThings\n      x-oapi-clientgen-pagination: {}"
+	withMark = "      operationId: listThings\n      x-oapi-gen-pagination: {}"
 )
 
 // variant edits the fixture and fails if an edit matched nothing: a
@@ -117,15 +117,15 @@ func TestTheAdviceMatchesWhichHalfTheAuthorWrote(t *testing.T) {
 	}{
 		{
 			name:    "named a cursor the operation does not declare",
-			marker:  "      x-oapi-clientgen-pagination: {cursor: {name: page_token}}",
-			want:    "point x-oapi-clientgen-pagination.cursor at a parameter",
-			notWant: "set x-oapi-clientgen-pagination.cursor",
+			marker:  "      x-oapi-gen-pagination: {cursor: {name: page_token}}",
+			want:    "point x-oapi-gen-pagination.cursor at a parameter",
+			notWant: "set x-oapi-gen-pagination.cursor",
 		},
 		{
 			name:    "left the cursor to the default, which does not fit",
-			marker:  "      x-oapi-clientgen-pagination: {}",
-			want:    "set x-oapi-clientgen-pagination.cursor",
-			notWant: "point x-oapi-clientgen-pagination.cursor at a parameter",
+			marker:  "      x-oapi-gen-pagination: {}",
+			want:    "set x-oapi-gen-pagination.cursor",
+			notWant: "point x-oapi-gen-pagination.cursor at a parameter",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -151,9 +151,29 @@ func TestTheAdviceMatchesWhichHalfTheAuthorWrote(t *testing.T) {
 // the same nil as no key at all - and means the opposite. An author
 // writes it believing they marked the operation, so reading it as
 // unmarked is the silent miss this marker exists to remove.
+// The key this tool read before the rename is refused by name.
+//
+// Nothing reads it now, so an operation carrying it would stop paging
+// in silence - the same failure the marker exists to remove, arriving
+// through the rename instead of through a guess. A spec is hand-
+// written, so no regeneration would ever fix it; only its author can,
+// and only if told.
+func TestTheKeyFromBeforeTheRenameIsRefused(t *testing.T) {
+	_, err := pagedOperations(spec(t, variant(t, oneArray,
+		unmarked, "      operationId: listThings\n      x-oapi-clientgen-pagination: {}")))
+	if err == nil {
+		t.Fatal("the pre-rename key was ignored, so the operation silently stopped paging")
+	}
+	for _, want := range []string{"x-oapi-clientgen-pagination", "x-oapi-gen-pagination", "rename it"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
 func TestAMarkerWithNoValueIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		unmarked, "      operationId: listThings\n      x-oapi-clientgen-pagination:")))
+		unmarked, "      operationId: listThings\n      x-oapi-gen-pagination:")))
 	if err == nil {
 		t.Fatal("a marker with no value was read as unmarked, silently")
 	}
@@ -205,7 +225,7 @@ func TestItemsResolvesTheAmbiguity(t *testing.T) {
 		"        nextCursor: {type: string}",
 		"        learnedBy: {type: array, items: {$ref: '#/components/schemas/Thing'}}\n        nextCursor: {type: string}",
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {items: /things}",
+		"      operationId: listThings\n      x-oapi-gen-pagination: {items: /things}",
 	)))
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +240,7 @@ func TestItemsResolvesTheAmbiguity(t *testing.T) {
 func TestACursorThatIsNotAParameterIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {cursor: {name: page_token, in: query}}")))
+		"      operationId: listThings\n      x-oapi-gen-pagination: {cursor: {name: page_token, in: query}}")))
 	if err == nil {
 		t.Fatal("a cursor naming no declared parameter was accepted")
 	}
@@ -237,7 +257,7 @@ func TestAnOverrideReplacesTheConvention(t *testing.T) {
 		"        nextCursor: {type: string}",
 		"        next_page_token: {type: string}",
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token, in: query}\n        next: /next_page_token",
+		"      operationId: listThings\n      x-oapi-gen-pagination:\n        cursor: {name: page_token, in: query}\n        next: /next_page_token",
 	)))
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +297,7 @@ func TestAnOverrideNamingNoFieldIsRefused(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"        nextCursor: {type: string}", "        updatedAt: {type: string}",
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {next: /nextCursor}",
+		"      operationId: listThings\n      x-oapi-gen-pagination: {next: /nextCursor}",
 	)))
 	if err == nil {
 		t.Fatal("a next naming no response field was accepted")
@@ -360,7 +380,7 @@ func TestAnOverrideMatchesTheLocationAsWell(t *testing.T) {
 		"- {name: after, in: query, schema: {type: string}}",
 		"- {name: page_token, in: header, schema: {type: string}}",
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token, in: query}\n        next: /nextCursor",
+		"      operationId: listThings\n      x-oapi-gen-pagination:\n        cursor: {name: page_token, in: query}\n        next: /nextCursor",
 	)))
 	if err == nil {
 		t.Fatal("a cursor naming a header as though it were a query parameter was accepted")
@@ -377,7 +397,7 @@ func TestAnOverrideWithoutALocationMeansQuery(t *testing.T) {
 		"- {name: after, in: query, schema: {type: string}}",
 		"- {name: page_token, in: query, schema: {type: string}}",
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination:\n        cursor: {name: page_token}\n        next: /nextCursor",
+		"      operationId: listThings\n      x-oapi-gen-pagination:\n        cursor: {name: page_token}\n        next: /nextCursor",
 	)))
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +410,7 @@ func TestAnOverrideWithoutALocationMeansQuery(t *testing.T) {
 // A paged operation with no operationId would name a method Iter.
 func TestAPagedOperationNeedsAnOperationID(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
-		"      parameters:", "      x-oapi-clientgen-pagination: {}\n      parameters:",
+		"      parameters:", "      x-oapi-gen-pagination: {}\n      parameters:",
 		"      operationId: listThings\n", "")))
 	if err == nil {
 		t.Fatal("a paged operation with no operationId was accepted")
@@ -419,7 +439,7 @@ func TestAnArrayWithoutItemsIsNotAPage(t *testing.T) {
 func TestItemsDoesNotMatchOnAPrefix(t *testing.T) {
 	_, err := pagedOperations(spec(t, variant(t, oneArray,
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {items: /thing}")))
+		"      operationId: listThings\n      x-oapi-gen-pagination: {items: /thing}")))
 	if err == nil {
 		t.Fatal("items naming a prefix of an array was accepted")
 	}
@@ -436,7 +456,7 @@ func TestANestedCursorResolves(t *testing.T) {
 		"        nextCursor: {type: string}",
 		"        meta: {type: object, properties: {nextCursor: {type: string}}}",
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {next: /meta/nextCursor}",
+		"      operationId: listThings\n      x-oapi-gen-pagination: {next: /meta/nextCursor}",
 	)))
 	if err != nil {
 		t.Fatal(err)
@@ -454,7 +474,7 @@ func TestANestedCursorMustExistAllTheWayDown(t *testing.T) {
 		"        nextCursor: {type: string}",
 		"        meta: {type: object, properties: {total: {type: integer}}}",
 		"      operationId: listThings",
-		"      operationId: listThings\n      x-oapi-clientgen-pagination: {next: /meta/nextCursor}",
+		"      operationId: listThings\n      x-oapi-gen-pagination: {next: /meta/nextCursor}",
 	)))
 	if err == nil {
 		t.Fatal("a next naming a field nested under the wrong parent was accepted")

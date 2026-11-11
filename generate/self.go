@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
-	"github.com/ChristopherScot/oapi-clientgen/codegen"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/codegen"
 	"gopkg.in/yaml.v3"
 )
 
@@ -210,7 +210,7 @@ func (g Generator) runOgenForSelf(dir, staged string, opts SelfOptions) error {
 }
 
 const selfOgenConfig = `# Generator settings for a spec this service owns.
-# Composed by oapi-clientgen; see runOgenForSelf for why.
+# Composed by oapi-gen; see runOgenForSelf for why.
 generator:
   features:
     disable:

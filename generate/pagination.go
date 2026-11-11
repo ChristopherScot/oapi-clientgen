@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,7 +31,13 @@ const (
 // Namespaced because the bare x-pagination is already APIMatic's, with
 // a different shape, and a spec carrying both would say two things at
 // once.
-const extensionKey = "x-oapi-clientgen-pagination"
+const extensionKey = "x-oapi-gen-pagination"
+
+// retiredExtensionKey is what this tool read when it was called
+// oapi-clientgen. Refused rather than honoured: a spec carrying it
+// means the author has not seen the rename, and reading it would make
+// the old name work forever.
+const retiredExtensionKey = "x-oapi-clientgen-pagination"
 
 type specParam struct {
 	Name     string `yaml:"name"`
@@ -58,7 +64,7 @@ type specPagination struct {
 type specOperation struct {
 	OperationID string          `yaml:"operationId"`
 	Parameters  []specParam     `yaml:"parameters"`
-	Pagination  *specPagination `yaml:"x-oapi-clientgen-pagination"`
+	Pagination  *specPagination `yaml:"x-oapi-gen-pagination"`
 }
 
 // pagedOperations reads the operations a spec says page.
@@ -98,11 +104,16 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			// is not paged, whatever its parameters are named.
 			//
 			// Absent and present-but-empty decode to the same nil,
-			// and they mean opposite things: `x-oapi-clientgen-
+			// and they mean opposite things: `x-oapi-gen-
 			// pagination:` with nothing after the colon is YAML null,
 			// which an author writes believing they marked it. Taking
 			// that as unmarked is the silent miss this marker exists
 			// to remove, so the raw document decides which it was.
+			if carriesRetiredKey(raw2, path, method) {
+				return nil, fmt.Errorf("%s: this operation carries %s, which this version no longer reads - rename it to %s, which means the same thing",
+					where, retiredExtensionKey, extensionKey)
+			}
+
 			if op.Pagination == nil {
 				if markerIsNull(raw2, path, method) {
 					return nil, fmt.Errorf("%s: %s carries %s with no value, which says nothing - write `%s: {}` to page on the default names, or remove the key if it does not page",
@@ -287,15 +298,33 @@ func resolveItems(doc map[string]any, schema map[string]any, op specOperation, w
 	}
 }
 
+// rawOperation is the operation as plain maps, for the two questions
+// the typed decode cannot answer: whether a key was present but null,
+// and whether a key this tool no longer reads is there.
+func rawOperation(doc map[string]any, path, method string) map[string]any {
+	paths, _ := doc["paths"].(map[string]any)
+	p, _ := paths[path].(map[string]any)
+	op, _ := p[method].(map[string]any)
+	return op
+}
+
 // markerIsNull reports whether the operation carries the extension key
 // with no value, which the typed decode cannot tell from its absence:
 // both leave the pointer nil.
 func markerIsNull(doc map[string]any, path, method string) bool {
-	paths, _ := doc["paths"].(map[string]any)
-	p, _ := paths[path].(map[string]any)
-	op, _ := p[method].(map[string]any)
-	v, present := op[extensionKey]
+	v, present := rawOperation(doc, path, method)[extensionKey]
 	return present && v == nil
+}
+
+// carriesRetiredKey reports whether the operation still names the key
+// this tool read before the rename.
+//
+// Nothing would read it now, so an operation carrying it would stop
+// paging in silence - which is the failure the marker exists to
+// remove, arriving by a different route. Refused by name instead.
+func carriesRetiredKey(doc map[string]any, path, method string) bool {
+	_, present := rawOperation(doc, path, method)[retiredExtensionKey]
+	return present
 }
 
 // responseSchema is the 200 response's JSON schema, $ref followed.

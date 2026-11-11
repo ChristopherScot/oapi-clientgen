@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ChristopherScot/oapi-clientgen/apispec"
+	"github.com/ChristopherScot/oapi-gen/apispec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -39,7 +39,7 @@ func stageSpec(raw []byte, name string, logf func(string, ...any)) (path string,
 		return "", nil, fmt.Errorf("re-encoding the spec: %w", err)
 	}
 
-	tmp, err := os.CreateTemp("", "oapi-clientgen-"+name+"-*.yml")
+	tmp, err := os.CreateTemp("", "oapi-gen-"+name+"-*.yml")
 	if err != nil {
 		return "", nil, fmt.Errorf("staging the spec: %w", err)
 	}

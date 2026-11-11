@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
-	"github.com/ChristopherScot/oapi-clientgen/codegen"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/codegen"
 )
 
 // The TypeScript counterpart of TestTheGeneratedTestsPass, and the

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherScot/oapi-clientgen/generate"
+	"github.com/ChristopherScot/oapi-gen/generate"
 )
 
 const petstore = `openapi: 3.0.0

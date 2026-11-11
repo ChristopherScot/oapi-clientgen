@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherScot/oapi-clientgen/apispec"
+	"github.com/ChristopherScot/oapi-gen/apispec"
 	"gopkg.in/yaml.v3"
 )
 

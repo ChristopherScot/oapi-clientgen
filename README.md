@@ -1,4 +1,4 @@
-# oapi-clientgen
+# oapi-gen
 
 Generates typed Go and TypeScript clients from an OpenAPI spec, with a
 transport that already handles the things a generated client usually
@@ -16,19 +16,19 @@ which still drives it for services it scaffolds.
 ## Install
 
 ```sh
-go install github.com/ChristopherScot/oapi-clientgen@latest
+go install github.com/ChristopherScot/oapi-gen@latest
 ```
 
 Or download a binary from
-[Releases](https://github.com/ChristopherScot/oapi-clientgen/releases).
-After that, `oapi-clientgen update` pulls the newest one.
+[Releases](https://github.com/ChristopherScot/oapi-gen/releases).
+After that, `oapi-gen update` pulls the newest one.
 
 ## Try a spec
 
 No config, nothing committed:
 
 ```sh
-oapi-clientgen generate client --spec https://example.com/openapi.json \
+oapi-gen generate client --spec https://example.com/openapi.json \
   --out ./internal/acmeapi
 ```
 
@@ -49,9 +49,9 @@ clients:
 ```
 
 ```sh
-oapi-clientgen list
-oapi-clientgen generate client
-oapi-clientgen generate client acme --refresh
+oapi-gen list
+oapi-gen generate client
+oapi-gen generate client acme --refresh
 ```
 
 A remote spec is **vendored on first use** and reused after that, so a
@@ -72,8 +72,8 @@ server scaffolding too, which a consumer of someone else's API never
 wants.
 
 ```sh
-oapi-clientgen generate self                      # ./openapi.yml -> ./api
-oapi-clientgen generate self ./openapi.yml --out api
+oapi-gen generate self                      # ./openapi.yml -> ./api
+oapi-gen generate self ./openapi.yml --out api
 ```
 
 Meant to run from the service's own `go:generate`, so CI's staleness
@@ -111,7 +111,7 @@ paths:
   /things:
     get:
       operationId: listThings
-      x-oapi-clientgen-pagination: {}
+      x-oapi-gen-pagination: {}
 ```
 
 Empty is the whole declaration when the operation asks with an `after`
@@ -123,6 +123,10 @@ that, one at a time:
 | `cursor` | the parameter carrying it — `{name: page_token, in: query}` |
 | `next` | where the next cursor is in the response — `/meta/next_page_token` |
 | `items` | which array is the page, required when the response holds more than one |
+
+Upgrading from `oapi-clientgen`: the key was `x-oapi-clientgen-pagination`
+and means the same thing. A spec still carrying it is refused by name
+rather than quietly read as unpaged.
 
 **An operation without the key does not page**, whatever its parameters
 are called. Guessing from the names gave an iterator to anything with
@@ -230,7 +234,7 @@ The CLI is a thin shell over `generate`; everything it does is
 available directly.
 
 ```go
-import "github.com/ChristopherScot/oapi-clientgen/generate"
+import "github.com/ChristopherScot/oapi-gen/generate"
 
 err := generate.Generate(".", "acme", generate.Client{
     Spec:      "https://example.com/openapi.json",

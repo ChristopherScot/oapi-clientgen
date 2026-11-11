@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
 )
 
 // A Retry-After header every generated client answers differently on

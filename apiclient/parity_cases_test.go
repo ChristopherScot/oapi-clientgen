@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
 )
 
 // The rule that lets the clients' answers be compared exactly.
