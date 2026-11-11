@@ -10,23 +10,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The cursor convention. An operation taking cursorParam AND answering
-// with nextField pages, and needs to say nothing else. Both halves are
-// required: after on its own is a plausible date filter.
+// The default cursor names, for an operation that says it pages
+// without saying how.
 //
-// Convention rather than configuration because the specs this
-// generates from are mostly ours, and three lines stating the same two
-// names on every paged operation is three lines nobody reads. A spec
-// that pages differently - a vendor's, where next_page_token is their
-// word and not ours - says so with the extension below.
+// Defaults rather than a trigger: taking a parameter called after
+// does not make an operation paged - after is a plausible date filter,
+// and an API paging under other words would be missed. Both mistakes
+// were silent, which is why the extension below decides instead. A
+// spec that pages differently - a vendor's, where next_page_token is
+// their word and not ours - overrides these.
 const (
 	cursorParam = "after"
 	nextField   = "nextCursor"
 )
 
-// extensionKey is namespaced because the bare x-pagination is already
-// APIMatic's, with a different shape, and a spec carrying both would
-// say two things at once.
+// extensionKey is what says an operation pages. Present with no
+// fields is the whole declaration for an API using the default names;
+// the fields override them one at a time.
+//
+// Namespaced because the bare x-pagination is already APIMatic's, with
+// a different shape, and a spec carrying both would say two things at
+// once.
 const extensionKey = "x-oapi-clientgen-pagination"
 
 type specParam struct {
@@ -61,9 +65,9 @@ type specOperation struct {
 //
 // OpenAPI cannot say "this operation is paged" and the field names
 // vary by API, so a generator either guesses or is told. Every
-// commercial generator is told. This one is told too, but briefly -
-// the cursor names are a convention and the extension exists for the
-// parts a convention cannot cover.
+// commercial generator is told, and so is this one: an operation pages
+// when it carries the extension, and not otherwise. The default names
+// keep that to one line for an API that follows them.
 func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 	raw, err := os.ReadFile(specPath)
 	if err != nil {
@@ -90,12 +94,15 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 		for method, op := range methods {
 			where := fmt.Sprintf("%s %s", strings.ToUpper(method), path)
 
-			cursor, ok, err := op.cursor(where)
+			// The marker is what says an operation pages. Unmarked
+			// is not paged, whatever its parameters are named.
+			if op.Pagination == nil {
+				continue
+			}
+
+			cursor, err := op.cursor(where)
 			if err != nil {
 				return nil, err
-			}
-			if !ok {
-				continue
 			}
 			// The same contradiction as a required response cursor,
 			// one request earlier: the FIRST call has no cursor to
@@ -120,24 +127,20 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			// the consumer's build inside a file telling them not to
 			// edit it.
 			//
-			// An override says the operation pages, so a response that
-			// cannot be read is the author's mistake. The convention
-			// only guesses, so the same response means "not paged".
-			stated := op.Pagination != nil
-
+			// Marked, so a response that cannot be read is the
+			// author's mistake rather than a reason to say nothing.
 			schema, err := responseSchema(raw2, path, method)
 			if err != nil {
-				if !stated {
-					continue
-				}
 				return nil, fmt.Errorf("%s: %s", where, err)
 			}
 			if !hasProperty(raw2, schema, "/"+op.next()) {
-				if !stated {
-					continue
+				named := op.Pagination.Next != ""
+				fix := fmt.Sprintf("set %s.next to the field that carries it", extensionKey)
+				if named {
+					fix = "name a field the response holds"
 				}
-				return nil, fmt.Errorf("%s: %s.next names %q, which is not a property of %s's response; it holds: %s",
-					where, extensionKey, op.next(), op.OperationID, propertyNames(schema))
+				return nil, fmt.Errorf("%s: %s is marked as paging, and its next cursor %q is not a property of its response; it holds: %s - %s, or drop the marker if it does not page",
+					where, op.OperationID, op.next(), propertyNames(schema), fix)
 			}
 
 			// A required cursor cannot mean what a cursor means. Its
@@ -188,35 +191,43 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 // An operation pages if it declares the convention's parameter or
 // names its own. Saying nothing and declaring nothing means it does
 // not page, which is most operations.
-func (op specOperation) cursor(where string) (specParam, bool, error) {
-	if op.Pagination == nil || op.Pagination.Cursor == nil {
-		// The convention. Whatever is found was found in the list, so
-		// there is nothing left to check.
-		for _, p := range op.Parameters {
-			if p.Name == cursorParam && p.In == "query" {
-				return p, true, nil
-			}
+// cursor is the parameter carrying the cursor, named by the marker or
+// defaulted to the convention's.
+//
+// Only called for a marked operation, so a parameter that is not there
+// is an error rather than a quiet "does not page". Both spellings of
+// the mistake reach the same message: naming the wrong parameter, and
+// leaving an operation on the convention that does not follow it.
+func (op specOperation) cursor(where string) (specParam, error) {
+	want := specParam{Name: cursorParam, In: "query"}
+	named := false
+	if op.Pagination.Cursor != nil {
+		want = *op.Pagination.Cursor
+		named = true
+		if want.In == "" {
+			want.In = "query"
 		}
-		return specParam{}, false, nil
 	}
 
-	want := *op.Pagination.Cursor
-	if want.In == "" {
-		want.In = "query"
-	}
 	declared := make([]string, 0, len(op.Parameters))
 	for _, p := range op.Parameters {
 		if p.Name == want.Name && p.In == want.In {
-			return p, true, nil
+			return p, nil
 		}
 		declared = append(declared, fmt.Sprintf("%s (%s)", p.Name, p.In))
 	}
-	if len(declared) == 0 {
-		return specParam{}, false, fmt.Errorf("%s: %s.cursor names %q in %q, and %s declares no parameters",
-			where, extensionKey, want.Name, want.In, op.OperationID)
+
+	// Which half to correct depends on which one the author wrote.
+	fix := fmt.Sprintf("set %s.cursor to the parameter that carries it", extensionKey)
+	if named {
+		fix = "name a parameter the operation declares"
 	}
-	return specParam{}, false, fmt.Errorf("%s: %s.cursor names %q in %q, which %s does not declare; it declares: %s",
-		where, extensionKey, want.Name, want.In, op.OperationID, strings.Join(declared, ", "))
+	if len(declared) == 0 {
+		return specParam{}, fmt.Errorf("%s: %s is marked as paging with a cursor %q in %q, and declares no parameters at all - %s, or drop the marker if it does not page",
+			where, op.OperationID, want.Name, want.In, fix)
+	}
+	return specParam{}, fmt.Errorf("%s: %s is marked as paging with a cursor %q in %q, which it does not declare; it declares: %s - %s, or drop the marker if it does not page",
+		where, op.OperationID, want.Name, want.In, strings.Join(declared, ", "), fix)
 }
 
 func (op specOperation) next() string {
@@ -253,7 +264,7 @@ func resolveItems(doc map[string]any, schema map[string]any, op specOperation, w
 				return a, nil
 			}
 		}
-		return arrayProperty{}, fmt.Errorf("%s: %s.items names %q, which is not an array in %s's response; it holds: %s",
+		return arrayProperty{}, fmt.Errorf("%s: %s.items names %q, which is not an array in %s's response; it holds: %s - name one of those",
 			where, extensionKey, want, op.OperationID, fieldNames(arrays))
 	}
 
@@ -261,7 +272,7 @@ func resolveItems(doc map[string]any, schema map[string]any, op specOperation, w
 	case 1:
 		return arrays[0], nil
 	case 0:
-		return arrayProperty{}, fmt.Errorf("%s: %s pages but its response holds no array to page over",
+		return arrayProperty{}, fmt.Errorf("%s: %s is marked as paging, but its response holds no array to page over - drop the marker if it does not page",
 			where, op.OperationID)
 	default:
 		return arrayProperty{}, fmt.Errorf("%s: %s's response holds %d arrays (%s), so %s.items has to say which is the page",
