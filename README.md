@@ -23,6 +23,12 @@ Or download a binary from
 [Releases](https://github.com/ChristopherScot/oapi-gen/releases).
 After that, `oapi-gen update` pulls the newest one.
 
+Coming from `oapi-clientgen`: `update` cannot cross the rename, because
+an old binary looks for an asset named after the old tool and v0.1.0
+does not publish one. It reports `release v0.1.0 has no asset for
+<os>/<arch>`, which is the rename rather than a broken release. Run the
+`go install` above once and `update` works again.
+
 ## Try a spec
 
 No config, nothing committed:

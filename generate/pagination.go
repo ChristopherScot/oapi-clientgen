@@ -100,6 +100,15 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 		for method, op := range methods {
 			where := fmt.Sprintf("%s %s", strings.ToUpper(method), path)
 
+			// The key this tool used to read, before anything that
+			// treats its absence as meaningful: a spec carrying it
+			// has not been migrated, and reading on would answer the
+			// wrong question quietly.
+			if carriesRetiredKey(raw2, path, method) {
+				return nil, fmt.Errorf("%s: this operation carries %s, which this version no longer reads - rename it to %s, which means the same thing",
+					where, retiredExtensionKey, extensionKey)
+			}
+
 			// The marker is what says an operation pages. Unmarked
 			// is not paged, whatever its parameters are named.
 			//
@@ -109,11 +118,6 @@ func pagedOperations(specPath string) ([]apiclient.PagedOp, error) {
 			// which an author writes believing they marked it. Taking
 			// that as unmarked is the silent miss this marker exists
 			// to remove, so the raw document decides which it was.
-			if carriesRetiredKey(raw2, path, method) {
-				return nil, fmt.Errorf("%s: this operation carries %s, which this version no longer reads - rename it to %s, which means the same thing",
-					where, retiredExtensionKey, extensionKey)
-			}
-
 			if op.Pagination == nil {
 				if markerIsNull(raw2, path, method) {
 					return nil, fmt.Errorf("%s: %s carries %s with no value, which says nothing - write `%s: {}` to page on the default names, or remove the key if it does not page",
