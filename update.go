@@ -184,7 +184,24 @@ func isNewer(latest, current string) bool {
 // executable cannot be overwritten in place on every platform, but it can
 // be renamed out of the way. The old binary is kept until the swap
 // succeeds so a failure is recoverable.
+// installFrom replaces the running binary with the one in the archive
+// at url.
 func installFrom(url string) error {
+	binPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate executable: %w", err)
+	}
+	binPath, err = filepath.EvalSymlinks(binPath)
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+	return installTo(url, binPath)
+}
+
+// installTo is the half that does not need to be the running binary,
+// so a test can watch what happens to a file it owns rather than to
+// the test runner.
+func installTo(url, binPath string) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -194,38 +211,50 @@ func installFrom(url string) error {
 		return fmt.Errorf("download returned %s", resp.Status)
 	}
 
-	binPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate executable: %w", err)
-	}
-	binPath, err = filepath.EvalSymlinks(binPath)
-	if err != nil {
-		return fmt.Errorf("resolve executable: %w", err)
-	}
-
 	gz, err := gzip.NewReader(resp.Body)
 	if err != nil {
 		return fmt.Errorf("decompress: %w", err)
 	}
 	defer gz.Close()
 
+	// The one regular file in the archive, rather than a file with a
+	// particular name.
+	//
+	// The release workflow tars a single binary at the root, so the
+	// name was only ever a proxy for "the thing in here" - and a
+	// copy of a name this tool has already renamed once, which the
+	// rename had to find and move in step with the workflow. The
+	// shape cannot drift that way.
+	//
+	// Written to a temporary file as it is read, because the body is
+	// a stream and cannot be rewound, then the rest of the archive is
+	// read to be sure nothing follows. Installing swaps the running
+	// binary, so an archive holding two files is refused while that
+	// is still a no-op.
+	tmp := binPath + ".new"
 	tr := tar.NewReader(gz)
+	found := ""
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return fmt.Errorf("archive contained no oapi-gen binary")
+			break
 		}
 		if err != nil {
+			os.Remove(tmp)
 			return fmt.Errorf("read archive: %w", err)
 		}
-		if h.Name != "oapi-gen" && h.Name != "./oapi-gen" {
+		if h.Typeflag != tar.TypeReg {
 			continue
+		}
+		if found != "" {
+			os.Remove(tmp)
+			return fmt.Errorf("archive holds more than one file (%s, %s), so which one is the binary is a guess", found, h.Name)
 		}
 		if h.Size > maxBinarySize {
 			return fmt.Errorf("binary is %d bytes, over the %d limit", h.Size, maxBinarySize)
 		}
+		found = h.Name
 
-		tmp := binPath + ".new"
 		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 		if err != nil {
 			return fmt.Errorf("create %s: %w", tmp, err)
@@ -240,18 +269,21 @@ func installFrom(url string) error {
 			os.Remove(tmp)
 			return fmt.Errorf("binary exceeded the %d byte limit", maxBinarySize)
 		}
-
-		old := binPath + ".old"
-		if err := os.Rename(binPath, old); err != nil {
-			os.Remove(tmp)
-			return fmt.Errorf("move current binary aside: %w", err)
-		}
-		if err := os.Rename(tmp, binPath); err != nil {
-			os.Rename(old, binPath) // put it back
-			os.Remove(tmp)
-			return fmt.Errorf("install new binary: %w", err)
-		}
-		os.Remove(old)
-		return nil
 	}
+	if found == "" {
+		return fmt.Errorf("archive held no binary")
+	}
+
+	old := binPath + ".old"
+	if err := os.Rename(binPath, old); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("move current binary aside: %w", err)
+	}
+	if err := os.Rename(tmp, binPath); err != nil {
+		os.Rename(old, binPath) // put it back
+		os.Remove(tmp)
+		return fmt.Errorf("install new binary: %w", err)
+	}
+	os.Remove(old)
+	return nil
 }
