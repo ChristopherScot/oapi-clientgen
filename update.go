@@ -2,15 +2,22 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
@@ -81,17 +88,25 @@ func runUpdate(checkOnly bool) error {
 	}
 
 	want := assetName()
-	var url string
+	var url, sumsURL string
 	for _, a := range rel.Assets {
-		if a.Name == want {
+		switch a.Name {
+		case want:
 			url = a.BrowserDownloadURL
-			break
+		case checksumsName:
+			sumsURL = a.BrowserDownloadURL
 		}
 	}
 	if url == "" {
 		return fmt.Errorf("release %s has no asset for %s/%s", rel.TagName, runtime.GOOS, runtime.GOARCH)
 	}
-	if err := installFrom(url); err != nil {
+	// Refused rather than installed unverified: this writes an
+	// executable over the running one, so a release nobody can check
+	// is the case to stop on, not the case to shrug at.
+	if sumsURL == "" {
+		return fmt.Errorf("release %s publishes no %s, so the download cannot be verified", rel.TagName, checksumsName)
+	}
+	if err := installFrom(url, sumsURL, want); err != nil {
 		return err
 	}
 	fmt.Printf("updated to %s\n", rel.TagName)
@@ -102,7 +117,8 @@ func runUpdate(checkOnly bool) error {
 // Not /releases/latest, which in a monorepo would be whichever sibling
 // released most recently. Releases come back newest-first.
 func latestRelease() (*githubRelease, error) {
-	resp, err := http.Get(fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=100", repoOwner, repoName))
+	client := &http.Client{Timeout: fetchTimeout}
+	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=100", repoOwner, repoName))
 	if err != nil {
 		return nil, err
 	}
@@ -180,9 +196,93 @@ func isNewer(latest, current string) bool {
 	return semver.Compare(latest, current) > 0
 }
 
+// checksumsName is the file the release workflow publishes beside the
+// binaries, one "sha256  filename" line per asset.
+const checksumsName = "checksums.txt"
+
+// fetchTimeout bounds a download. GitHub being slow should fail the
+// command rather than hang a terminal waiting on it.
+const fetchTimeout = 30 * time.Second
+
+// execTimeout bounds the downloaded binary's one trial run. It only
+// has to print a version; anything slower is not working.
+const execTimeout = 10 * time.Second
+
+// fetch reads a URL into memory, bounded in both size and time.
+func fetch(url string) ([]byte, error) {
+	client := &http.Client{Timeout: fetchTimeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s returned %s", url, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBinarySize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", url, err)
+	}
+	if len(body) > maxBinarySize {
+		return nil, fmt.Errorf("%s is over the %d byte limit", url, maxBinarySize)
+	}
+	return body, nil
+}
+
+// verify checks the archive against the checksum published for it.
+//
+// Without this, update is an arbitrary-code path gated only by TLS:
+// whatever can answer for the release URL decides what runs as the
+// user on the next invocation. A name that is not in the file is
+// refused rather than skipped - "no line for this asset" and "the
+// bytes are wrong" are the same answer here, which is do not install.
+func verify(archive []byte, assetName string, sums []byte) error {
+	var want []byte
+	for _, line := range strings.Split(string(sums), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 || f[1] != assetName {
+			continue
+		}
+		decoded, err := hex.DecodeString(f[0])
+		if err != nil {
+			return fmt.Errorf("%s has an unreadable checksum for %s: %w", checksumsName, assetName, err)
+		}
+		want = decoded
+		break
+	}
+	if want == nil {
+		return fmt.Errorf("%s has no line for %s, so the download cannot be verified", checksumsName, assetName)
+	}
+	got := sha256.Sum256(archive)
+	// Constant time, and free: a timing signal here would leak which
+	// prefix of a forged checksum was right.
+	if !hmac.Equal(got[:], want) {
+		return fmt.Errorf("%s does not match its published checksum - refusing to install", assetName)
+	}
+	return nil
+}
+
+// runnable reports whether the downloaded file executes on this
+// machine, by asking it its version.
+//
+// `version` is the one subcommand every release has had, and it needs
+// no network, no config and no arguments. A wrong-architecture binary
+// fails here with an exec format error rather than at the user's next
+// invocation, when the working copy is already gone.
+func runnable(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("the downloaded binary does not run here (%w), so it was not installed: %s",
+			err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // installFrom replaces the running binary with the one in the archive
 // at url.
-func installFrom(url string) error {
+func installFrom(url, sumsURL, assetName string) error {
 	binPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
@@ -191,7 +291,7 @@ func installFrom(url string) error {
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
-	return installTo(url, binPath)
+	return installTo(url, sumsURL, assetName, binPath)
 }
 
 // installTo is the half that does not need to be the running binary,
@@ -202,17 +302,24 @@ func installFrom(url string) error {
 // overwritten in place on every platform, but it can be renamed out of
 // the way. The old binary is kept until the swap succeeds so a failure
 // is recoverable.
-func installTo(url, binPath string) error {
-	resp, err := http.Get(url)
+func installTo(url, sumsURL, assetName, binPath string) error {
+	// Held in memory rather than streamed, because a hash is only a
+	// check if it is computed before anything acts on the bytes.
+	// Streaming would extract first and verify after, which verifies
+	// nothing. The compressed archive is a few megabytes.
+	archive, err := fetch(url)
 	if err != nil {
-		return fmt.Errorf("download %s: %w", url, err)
+		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned %s", resp.Status)
+	sums, err := fetch(sumsURL)
+	if err != nil {
+		return err
+	}
+	if err := verify(archive, assetName, sums); err != nil {
+		return err
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return fmt.Errorf("decompress: %w", err)
 	}
@@ -293,6 +400,15 @@ func installTo(url, binPath string) error {
 	}
 	if found == "" {
 		return fmt.Errorf("archive held no binary")
+	}
+
+	// Run it before trusting it. A checksum proves the bytes are the
+	// ones published; it cannot prove they are a binary this machine
+	// can execute - a release built for the wrong architecture, or
+	// from a failed build, hashes correctly and still bricks the
+	// tool. The swap is the last thing that happens.
+	if err := runnable(tmp); err != nil {
+		return err
 	}
 
 	old := binPath + ".old"
