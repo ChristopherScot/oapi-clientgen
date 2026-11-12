@@ -197,8 +197,16 @@ func isNewer(latest, current string) bool {
 }
 
 // checksumsName is the file the release workflow publishes beside the
-// binaries, one "sha256  filename" line per asset.
+// binaries: plain `sha256sum` output, one "sha256<2 spaces>filename"
+// line per asset. Not goreleaser's binary mode, which writes "*name"
+// and would not parse - an update would refuse every release rather
+// than accept a wrong one, but it would refuse them all.
 const checksumsName = "checksums.txt"
+
+// maxSumsSize bounds checksums.txt, which lists four assets and runs
+// to a few hundred bytes. Separate from maxBinarySize because a bound
+// sized for a binary says nothing about a list of hashes.
+const maxSumsSize = 64 * 1024
 
 // fetchTimeout bounds a download. GitHub being slow should fail the
 // command rather than hang a terminal waiting on it.
@@ -208,8 +216,10 @@ const fetchTimeout = 30 * time.Second
 // has to print a version; anything slower is not working.
 const execTimeout = 10 * time.Second
 
-// fetch reads a URL into memory, bounded in both size and time.
-func fetch(url string) ([]byte, error) {
+// fetch reads a URL into memory, bounded in both size and time. The
+// size is the caller's because the two things fetched here differ by
+// five orders of magnitude.
+func fetch(url string, limit int64) ([]byte, error) {
 	client := &http.Client{Timeout: fetchTimeout}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -219,12 +229,12 @@ func fetch(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download %s returned %s", url, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBinarySize+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", url, err)
 	}
-	if len(body) > maxBinarySize {
-		return nil, fmt.Errorf("%s is over the %d byte limit", url, maxBinarySize)
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("%s is over the %d byte limit", url, limit)
 	}
 	return body, nil
 }
@@ -236,28 +246,29 @@ func fetch(url string) ([]byte, error) {
 // user on the next invocation. A name that is not in the file is
 // refused rather than skipped - "no line for this asset" and "the
 // bytes are wrong" are the same answer here, which is do not install.
-func verify(archive []byte, assetName string, sums []byte) error {
+func verify(archive []byte, asset string, sums []byte) error {
 	var want []byte
 	for _, line := range strings.Split(string(sums), "\n") {
 		f := strings.Fields(line)
-		if len(f) != 2 || f[1] != assetName {
+		if len(f) != 2 || f[1] != asset {
 			continue
 		}
 		decoded, err := hex.DecodeString(f[0])
 		if err != nil {
-			return fmt.Errorf("%s has an unreadable checksum for %s: %w", checksumsName, assetName, err)
+			return fmt.Errorf("%s has an unreadable checksum for %s: %w", checksumsName, asset, err)
 		}
 		want = decoded
 		break
 	}
 	if want == nil {
-		return fmt.Errorf("%s has no line for %s, so the download cannot be verified", checksumsName, assetName)
+		return fmt.Errorf("%s has no line for %s, so the download cannot be verified", checksumsName, asset)
 	}
 	got := sha256.Sum256(archive)
-	// Constant time, and free: a timing signal here would leak which
-	// prefix of a forged checksum was right.
+	// Constant time, and free. Not load-bearing here - both sides are
+	// public, and an attacker can compute either offline - but
+	// comparing digests in variable time is a habit worth keeping.
 	if !hmac.Equal(got[:], want) {
-		return fmt.Errorf("%s does not match its published checksum - refusing to install", assetName)
+		return fmt.Errorf("%s does not match its published checksum - refusing to install", asset)
 	}
 	return nil
 }
@@ -282,7 +293,7 @@ func runnable(path string) error {
 
 // installFrom replaces the running binary with the one in the archive
 // at url.
-func installFrom(url, sumsURL, assetName string) error {
+func installFrom(url, sumsURL, asset string) error {
 	binPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
@@ -291,7 +302,7 @@ func installFrom(url, sumsURL, assetName string) error {
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
-	return installTo(url, sumsURL, assetName, binPath)
+	return installTo(url, sumsURL, asset, binPath)
 }
 
 // installTo is the half that does not need to be the running binary,
@@ -302,20 +313,21 @@ func installFrom(url, sumsURL, assetName string) error {
 // overwritten in place on every platform, but it can be renamed out of
 // the way. The old binary is kept until the swap succeeds so a failure
 // is recoverable.
-func installTo(url, sumsURL, assetName, binPath string) error {
+func installTo(url, sumsURL, asset, binPath string) error {
 	// Held in memory rather than streamed, because a hash is only a
 	// check if it is computed before anything acts on the bytes.
 	// Streaming would extract first and verify after, which verifies
-	// nothing. The compressed archive is a few megabytes.
-	archive, err := fetch(url)
+	// nothing. Bounded by maxBinarySize rather than by whatever
+	// today's release happens to weigh.
+	archive, err := fetch(url, maxBinarySize)
 	if err != nil {
 		return err
 	}
-	sums, err := fetch(sumsURL)
+	sums, err := fetch(sumsURL, maxSumsSize)
 	if err != nil {
 		return err
 	}
-	if err := verify(archive, assetName, sums); err != nil {
+	if err := verify(archive, asset, sums); err != nil {
 		return err
 	}
 

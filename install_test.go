@@ -260,3 +260,24 @@ func TestABinaryThatDoesNotRunIsNotInstalled(t *testing.T) {
 		t.Error("the rejected download was left behind")
 	}
 }
+
+// checksums.txt lists four assets and runs to a few hundred bytes. A
+// bound sized for a 100MB binary would let a hostile endpoint spend
+// the client's memory on a file that is never that large.
+func TestAnOversizedChecksumsFileIsRefused(t *testing.T) {
+	bin := standIn(t, runs)
+	archive := archiveOf(t, map[string]string{"oapi-gen": runs})
+	huge := bytes.Repeat([]byte("x"), maxSumsSize+1)
+
+	asset, sumsURL := release(t, archive, huge)
+	err := installTo(asset, sumsURL, assetName(), bin)
+	if err == nil {
+		t.Fatal("an oversized checksums.txt was accepted")
+	}
+	if !strings.Contains(err.Error(), "limit") {
+		t.Errorf("error does not say it was over the limit: %v", err)
+	}
+	if got, _ := os.ReadFile(bin); string(got) != runs {
+		t.Errorf("the binary was replaced: %q", got)
+	}
+}
