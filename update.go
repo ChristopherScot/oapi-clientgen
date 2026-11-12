@@ -180,10 +180,6 @@ func isNewer(latest, current string) bool {
 	return semver.Compare(latest, current) > 0
 }
 
-// installFrom replaces the running binary via a rename dance: a running
-// executable cannot be overwritten in place on every platform, but it can
-// be renamed out of the way. The old binary is kept until the swap
-// succeeds so a failure is recoverable.
 // installFrom replaces the running binary with the one in the archive
 // at url.
 func installFrom(url string) error {
@@ -201,10 +197,15 @@ func installFrom(url string) error {
 // installTo is the half that does not need to be the running binary,
 // so a test can watch what happens to a file it owns rather than to
 // the test runner.
+//
+// Replaces binPath via a rename dance: a running executable cannot be
+// overwritten in place on every platform, but it can be renamed out of
+// the way. The old binary is kept until the swap succeeds so a failure
+// is recoverable.
 func installTo(url, binPath string) error {
 	resp, err := http.Get(url)
 	if err != nil {
-		return err
+		return fmt.Errorf("download %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -231,7 +232,18 @@ func installTo(url, binPath string) error {
 	// read to be sure nothing follows. Installing swaps the running
 	// binary, so an archive holding two files is refused while that
 	// is still a no-op.
+	// Cleaned up unless the install succeeds, rather than at each
+	// error return: the returns that skipped it were only safe while
+	// no temp file existed, and a .new left by an interrupted run
+	// makes them reachable with one that does.
 	tmp := binPath + ".new"
+	installed := false
+	defer func() {
+		if !installed {
+			os.Remove(tmp)
+		}
+	}()
+
 	tr := tar.NewReader(gz)
 	found := ""
 	for {
@@ -240,15 +252,16 @@ func installTo(url, binPath string) error {
 			break
 		}
 		if err != nil {
-			os.Remove(tmp)
 			return fmt.Errorf("read archive: %w", err)
 		}
+		// Regular files only. A symlink entry is skipped rather
+		// than followed, so an archive naming one cannot aim the
+		// install at a path outside it.
 		if h.Typeflag != tar.TypeReg {
 			continue
 		}
 		if found != "" {
-			os.Remove(tmp)
-			return fmt.Errorf("archive holds more than one file (%s, %s), so which one is the binary is a guess", found, h.Name)
+			return fmt.Errorf("archive holds more than one file (%s, %s)", found, h.Name)
 		}
 		if h.Size > maxBinarySize {
 			return fmt.Errorf("binary is %d bytes, over the %d limit", h.Size, maxBinarySize)
@@ -259,15 +272,23 @@ func installTo(url, binPath string) error {
 		if err != nil {
 			return fmt.Errorf("create %s: %w", tmp, err)
 		}
-		n, err := io.Copy(f, io.LimitReader(tr, maxBinarySize))
+		// One byte past the ceiling, so exceeding it and exactly
+		// reaching it are distinguishable. Reading to the ceiling
+		// made a binary of exactly maxBinarySize look like overflow.
+		n, err := io.Copy(f, io.LimitReader(tr, maxBinarySize+1))
 		f.Close()
 		if err != nil {
-			os.Remove(tmp)
 			return fmt.Errorf("write %s: %w", tmp, err)
 		}
-		if n == maxBinarySize {
-			os.Remove(tmp)
+		if n > maxBinarySize {
 			return fmt.Errorf("binary exceeded the %d byte limit", maxBinarySize)
+		}
+		// A build that failed without halting its workflow publishes
+		// an archive shaped exactly right and empty. Installing it
+		// leaves nothing able to install anything else, and the copy
+		// that could have undone it is removed two statements later.
+		if n == 0 {
+			return fmt.Errorf("the one file in the archive (%s) is empty, so it is not a binary", h.Name)
 		}
 	}
 	if found == "" {
@@ -276,14 +297,13 @@ func installTo(url, binPath string) error {
 
 	old := binPath + ".old"
 	if err := os.Rename(binPath, old); err != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("move current binary aside: %w", err)
 	}
 	if err := os.Rename(tmp, binPath); err != nil {
 		os.Rename(old, binPath) // put it back
-		os.Remove(tmp)
 		return fmt.Errorf("install new binary: %w", err)
 	}
+	installed = true
 	os.Remove(old)
 	return nil
 }
