@@ -1,7 +1,8 @@
 # oapi-gen
 
-Generates typed Go and TypeScript clients from an OpenAPI spec, with a
-transport that already handles the things a generated client usually
+Generates typed Go and TypeScript clients from an OpenAPI spec - and,
+for a spec a service owns, the Go server interface it implements. The
+transport already handles the things a generated client usually
 leaves to you: per-attempt timeouts, bounded retries, `Retry-After`,
 and a circuit breaker.
 

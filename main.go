@@ -67,13 +67,16 @@ func pickVersion(ldflags, modver string) string {
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "oapi-gen",
-		Short: "generate typed clients from an OpenAPI spec",
+		Short: "generate typed clients, and a server, from an OpenAPI spec",
 		Long: `Generate typed Go and TypeScript clients from an OpenAPI spec,
 with a transport that already does timeouts, retries, Retry-After and
 circuit breaking.
 
 Declare clients in clients.yaml and run with no arguments, or point
---spec at one spec to try it without committing to anything.`,
+--spec at one spec to try it without committing to anything.
+
+For a spec a service owns, ` + "`generate self`" + ` writes the server
+interface as well as both clients.`,
 		SilenceUsage: true,
 	}
 	root.AddCommand(clientGenerateCmd(), clientListCmd(), updateCmd(), versionCmd())
