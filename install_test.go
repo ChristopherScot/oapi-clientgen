@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // archiveOf builds a .tar.gz holding the named files, so a test can
@@ -279,5 +280,51 @@ func TestAnOversizedChecksumsFileIsRefused(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(bin); string(got) != runs {
 		t.Errorf("the binary was replaced: %q", got)
+	}
+}
+
+// A binary that hangs must not hang the update. CombinedOutput waits
+// on the output pipes rather than the process, so the context's
+// deadline alone does not return control - a sleep 30 against a 10s
+// deadline returned after 30s until WaitDelay was set.
+func TestAHangingBinaryDoesNotHangTheUpdate(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "slow")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	err := runnable(p)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a binary that never printed a version was accepted")
+	}
+	// Generous, because the point is "bounded", not "fast": without
+	// the fix this takes the payload's full 30s.
+	if elapsed > execTimeout+5*time.Second {
+		t.Errorf("runnable took %v for a %v deadline, so the deadline is not bounding it", elapsed.Round(time.Second), execTimeout)
+	}
+	if !strings.Contains(err.Error(), "did not print a version") {
+		t.Errorf("a timeout is reported as something else: %v", err)
+	}
+}
+
+// What a failing binary prints ends up in an error message, and it
+// has already run, so it chooses that text.
+func TestABinarysOutputCannotPaintTheTerminal(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "noisy")
+	// Clears the screen, homes the cursor, then claims success.
+	body := "#!/bin/sh\nprintf '\\033[2J\\033[1;1HFAKE: update succeeded'\nexit 1\n"
+	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runnable(p)
+	if err == nil {
+		t.Fatal("a binary exiting non-zero was accepted")
+	}
+	if strings.ContainsRune(err.Error(), '\x1b') {
+		t.Error("the binary's terminal escapes reached the error message raw")
 	}
 }

@@ -227,6 +227,7 @@ func fetch(url string, limit int64) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		return nil, fmt.Errorf("download %s returned %s", url, resp.Status)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -248,6 +249,7 @@ func fetch(url string, limit int64) ([]byte, error) {
 // bytes are wrong" are the same answer here, which is do not install.
 func verify(archive []byte, asset string, sums []byte) error {
 	var want []byte
+	found := false
 	for _, line := range strings.Split(string(sums), "\n") {
 		f := strings.Fields(line)
 		if len(f) != 2 || f[1] != asset {
@@ -257,10 +259,10 @@ func verify(archive []byte, asset string, sums []byte) error {
 		if err != nil {
 			return fmt.Errorf("%s has an unreadable checksum for %s: %w", checksumsName, asset, err)
 		}
-		want = decoded
+		want, found = decoded, true
 		break
 	}
-	if want == nil {
+	if !found {
 		return fmt.Errorf("%s has no line for %s, so the download cannot be verified", checksumsName, asset)
 	}
 	got := sha256.Sum256(archive)
@@ -274,19 +276,44 @@ func verify(archive []byte, asset string, sums []byte) error {
 }
 
 // runnable reports whether the downloaded file executes on this
-// machine, by asking it its version.
+// machine.
 //
-// `version` is the one subcommand every release has had, and it needs
-// no network, no config and no arguments. A wrong-architecture binary
-// fails here with an exec format error rather than at the user's next
-// invocation, when the working copy is already gone.
+// It asserts that the file runs and exits zero, which is what catches
+// a wrong-architecture or failed build - not that it is this tool.
+// `version` is the subcommand every release has had, and it needs no
+// network, no config and no arguments. The bytes are already known to
+// be the published ones; verify ran first.
+//
+// A wrong-architecture binary fails here with an exec format error
+// rather than at the user's next invocation, when the working copy is
+// already gone.
 func runnable(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+
+	cmd := exec.CommandContext(ctx, path, "version")
+	// Without this the deadline does nothing: CombinedOutput waits on
+	// the output pipes, not the process, so a binary that is killed
+	// while a child still holds stdout keeps the call blocked. A
+	// sleep 30 against a 10s deadline returned after 30s.
+	cmd.WaitDelay = time.Second
+
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("the downloaded binary does not run here (%w), so it was not installed: %s",
-			err, strings.TrimSpace(string(out)))
+		// Took too long is not the same as does not run, and reading
+		// "does not run here" for a slow binary sends someone
+		// chasing an architecture mismatch that is not there.
+		if ctx.Err() != nil {
+			return fmt.Errorf("the downloaded binary did not print a version within %v, so it was not installed", execTimeout)
+		}
+		// Quoted and bounded: it has already run, so it chooses this
+		// text, and raw terminal escapes in an error message are its
+		// choice too.
+		out = bytes.TrimSpace(out)
+		if len(out) > 2048 {
+			out = append(out[:2048:2048], "..."...)
+		}
+		return fmt.Errorf("the downloaded binary does not run here (%w), so it was not installed: %q", err, out)
 	}
 	return nil
 }
