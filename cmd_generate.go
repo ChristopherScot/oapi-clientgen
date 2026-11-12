@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ChristopherScot/oapi-clientgen/generate"
+	"github.com/ChristopherScot/oapi-gen/generate"
 	"github.com/spf13/cobra"
 )
 
@@ -85,9 +85,9 @@ A remote spec is vendored on first use and reused after that, so a
 build does not depend on a third party being reachable. --refresh
 re-fetches it, which is how an upstream change enters the repo: as a
 reviewable diff.`,
-		Example: `  oapi-clientgen generate client
-  oapi-clientgen generate client acme --refresh
-  oapi-clientgen generate client --spec ./acme.json --out ./internal/acmeapi`,
+		Example: `  oapi-gen generate client
+  oapi-gen generate client acme --refresh
+  oapi-gen generate client --spec ./acme.json --out ./internal/acmeapi`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			// --spec is the no-manifest path: one client, named by its
 			// output directory, nothing committed. It exists so a spec
@@ -171,8 +171,8 @@ gate catches a spec change that was not regenerated.
 There is no ogen.yml to edit. The settings are the same for every
 service built this way, so they are composed here rather than copied
 into each one.`,
-		Example: `  oapi-clientgen generate self
-  oapi-clientgen generate self ./openapi.yml --out api`,
+		Example: `  oapi-gen generate self
+  oapi-gen generate self ./openapi.yml --out api`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			spec := "openapi.yml"
 			if len(args) == 1 {

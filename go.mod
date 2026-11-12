@@ -1,4 +1,4 @@
-module github.com/ChristopherScot/oapi-clientgen
+module github.com/ChristopherScot/oapi-gen
 
 go 1.27
 

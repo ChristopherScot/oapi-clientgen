@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
-	"github.com/ChristopherScot/oapi-clientgen/codegen"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/codegen"
 )
 
 // The Go client template ships tests of its own, and until now they
@@ -164,7 +164,7 @@ paths:
   /things:
     get:
       operationId: listThings
-      x-oapi-clientgen-pagination: {}
+      x-oapi-gen-pagination: {}
       parameters:
         - {name: after, in: query, schema: {type: string}}
       responses:

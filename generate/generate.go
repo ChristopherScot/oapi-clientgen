@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
-	"github.com/ChristopherScot/oapi-clientgen/apispec"
-	"github.com/ChristopherScot/oapi-clientgen/codegen"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apispec"
+	"github.com/ChristopherScot/oapi-gen/codegen"
 	"gopkg.in/yaml.v3"
 )
 
@@ -390,7 +390,7 @@ func toOpenAPI3(raw []byte, dir, name string) ([]byte, bool, error) {
 		return raw, false, nil
 	}
 
-	in, err := os.CreateTemp("", "oapi-clientgen-"+name+"-v2-*.json")
+	in, err := os.CreateTemp("", "oapi-gen-"+name+"-v2-*.json")
 	if err != nil {
 		return nil, false, err
 	}

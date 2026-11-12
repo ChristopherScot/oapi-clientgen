@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
 	"gopkg.in/yaml.v3"
 )
 

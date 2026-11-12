@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/ChristopherScot/oapi-clientgen/apiclient"
+	"github.com/ChristopherScot/oapi-gen/apiclient"
 )
 
 // Generator versions are pinned exactly. With @latest a build breaks
