@@ -2,6 +2,7 @@ package apiclient
 
 import (
 	"bytes"
+	"fmt"
 	"go/format"
 	"strings"
 	"testing"
@@ -224,27 +225,82 @@ func TestGoConstructorMatchesOgensSignature(t *testing.T) {
 // where a CI step or a pre-commit hook runs gofmt, and a diff there
 // points at a file the consumer cannot usefully edit - the fix is
 // always back here in the template.
+//
+// Read from the TEMPLATES, not from Go(): that runs its output through
+// gofmt, so a test reading it would be asking whether gofmt's output
+// is gofmt-clean. It is, for anything that parses, which makes the
+// assertion unfailable: reverting the {{- end }} this gate exists to
+// hold left it green, which is how the first version of this fix
+// shipped a gate that could not fail.
+//
+// Both with and without a paged operation, because paging_ops.go is
+// written only when something is paged (when: anyPaged) and a template
+// can be wrong only on the path the other fixture never renders. That
+// is how a blank line at the end of paging_ops.go survived a gate that
+// rendered neither.
 func TestGeneratedGoIsFormatted(t *testing.T) {
-	files, err := Go(Params{
-		Name: "x", Version: "1.0.0", Package: "api",
-		ImportPath: "example.com/x",
-	})
-	if err != nil {
-		t.Fatal(err)
+	checked := map[string]bool{}
+	for _, paged := range [][]PagedOp{
+		{{
+			OperationID: "listThings", CursorParam: "after",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
+		}},
+		nil,
+	} {
+		p := Params{
+			Name: "x", Version: "1.0.0", Package: "api",
+			ImportPath: "example.com/x", Paged: paged,
+		}
+		for tmpl, path := range GoTemplates(p) {
+			body, err := RenderWith(tmpl, p, Defaults())
+			if err != nil {
+				t.Fatalf("%s: %v", tmpl, err)
+			}
+			checked[path] = true
+			want, err := format.Source([]byte(body))
+			if err != nil {
+				t.Errorf("%s does not parse: %v\n%s", path, err, firstLines(body, 5))
+				continue
+			}
+			if string(want) != body {
+				t.Errorf("%s is not gofmt-clean; fix %s, not the output.\ngot:\n%s\nwant:\n%s",
+					path, tmpl, firstDiff(body, string(want)), firstDiff(string(want), body))
+			}
+		}
 	}
-	for _, f := range files {
-		if !strings.HasSuffix(f.Path, ".go") {
-			continue
-		}
-		want, err := format.Source([]byte(f.Body))
-		if err != nil {
-			t.Errorf("%s does not parse: %v", f.Path, err)
-			continue
-		}
-		if string(want) != f.Body {
-			t.Errorf("%s is not gofmt-clean; fix the template, not the output", f.Path)
+	// Every Go file the generator can write has to have been read,
+	// or this gate is green over whatever it happened to render.
+	for tmpl, path := range GoTemplates(Params{
+		Name: "x", Version: "1.0.0", Package: "api", ImportPath: "example.com/x",
+		Paged: []PagedOp{{OperationID: "listThings", CursorParam: "after",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing"}},
+	}) {
+		if !checked[path] {
+			t.Errorf("%s (%s) rendered empty under both fixtures; the gate never saw it", path, tmpl)
 		}
 	}
+}
+
+// firstDiff is the first line on which two renderings differ, with its
+// number, so a formatting failure says where rather than only which
+// file.
+func firstDiff(a, b string) string {
+	as, bs := strings.Split(a, "\n"), strings.Split(b, "\n")
+	for i := range as {
+		if i >= len(bs) {
+			if as[i] == "" {
+				return fmt.Sprintf("line %d: a trailing blank line", i+1)
+			}
+			return fmt.Sprintf("line %d: extra %q", i+1, as[i])
+		}
+		if as[i] != bs[i] {
+			return fmt.Sprintf("line %d: %q", i+1, as[i])
+		}
+	}
+	if len(bs) > len(as) {
+		return fmt.Sprintf("line %d: missing %q", len(as)+1, bs[len(as)])
+	}
+	return "(no line differs)"
 }
 
 // firstLines is the start of a rendered file, for an error that has to
