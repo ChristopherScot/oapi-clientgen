@@ -3,6 +3,7 @@ package apiclient
 import (
 	"bytes"
 	"go/format"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -225,17 +226,33 @@ func TestGoConstructorMatchesOgensSignature(t *testing.T) {
 // points at a file the consumer cannot usefully edit - the fix is
 // always back here in the template.
 func TestGeneratedGoIsFormatted(t *testing.T) {
-	files, err := Go(Params{
+	// Paged is set so paging_ops.go renders. Without it the file this
+	// test most needs to see is simply absent - it is written only
+	// when the spec marks something - and the test passed for years
+	// while that file ended in a blank line and failed gofmt in every
+	// consumer's repo.
+	p := Params{
 		Name: "x", Version: "1.0.0", Package: "api",
 		ImportPath: "example.com/x",
-	})
+		Paged: []PagedOp{{
+			OperationID: "listThings", CursorParam: "after",
+			NextPath: "/nextCursor", ItemsPath: "/things", ItemType: "Thing",
+		}},
+	}
+	files, err := Go(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range files {
+	tests, err := GoTests(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw []string
+	for _, f := range append(files, tests...) {
 		if !strings.HasSuffix(f.Path, ".go") {
 			continue
 		}
+		saw = append(saw, f.Path)
 		want, err := format.Source([]byte(f.Body))
 		if err != nil {
 			t.Errorf("%s does not parse: %v", f.Path, err)
@@ -244,6 +261,11 @@ func TestGeneratedGoIsFormatted(t *testing.T) {
 		if string(want) != f.Body {
 			t.Errorf("%s is not gofmt-clean; fix the template, not the output", f.Path)
 		}
+	}
+	// The file the bug was in has to be among them, or this test is
+	// green because it rendered nothing interesting.
+	if !slices.Contains(saw, "paging_ops.go") {
+		t.Errorf("paging_ops.go was not rendered; checked %v", saw)
 	}
 }
 

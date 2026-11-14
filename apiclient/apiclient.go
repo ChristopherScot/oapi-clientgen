@@ -12,6 +12,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"go/format"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -283,6 +284,23 @@ func files(set []templateFile, p Params) ([]File, error) {
 		body, err := render(f.tmpl, p)
 		if err != nil {
 			return nil, err
+		}
+		// Go output goes through gofmt rather than being hand-spaced
+		// in the templates. Spacing is contextual - gofmt writes
+		// 30*time.Second as a call argument and 1 * time.Second in a
+		// composite literal - so a template, and goDuration in
+		// particular, cannot know which its output will land in. It
+		// writes the expression; gofmt decides how it is written.
+		//
+		// A consumer's CI runs gofmt on these files and the fix for a
+		// diff there is always back here, so emitting anything else
+		// fails a lint on a file they are told not to edit.
+		if strings.HasSuffix(f.path, ".go") {
+			formatted, err := format.Source([]byte(body))
+			if err != nil {
+				return nil, fmt.Errorf("%s does not parse: %w", f.path, err)
+			}
+			body = string(formatted)
 		}
 		out = append(out, File{Path: f.path, Body: body})
 	}
