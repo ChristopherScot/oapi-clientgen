@@ -71,6 +71,86 @@ Rather than hand-editing the vendored copy — which the next refresh
 would overwrite — a patch is applied on the way through, so the
 vendored file stays exactly what upstream published.
 
+### Writing a patch
+
+A patch file is a list of operations, applied in order, every time the
+client is generated. The vendored spec is never edited.
+
+```yaml
+- op: remove
+  path: /paths/~1widgets~1{id}/delete/requestBody
+  why: upstream declares a requestBody with no content on a DELETE; invalid per OpenAPI and rejected by ogen
+```
+
+Three operations:
+
+- **`set`** — `path` plus `value`. Replaces the value at a JSON
+  Pointer. It will not create a key that is not already there, so a
+  typo'd path is an error rather than a field upstream never had.
+- **`remove`** — `path`. Deletes a key.
+- **`rename-component`** — `from` and `to`, each `<section>/<name>`
+  (e.g. `parameters/RegistrantStatus`). Moves a component and rewrites
+  every `$ref` pointing at it. Its own operation rather than a `set`,
+  because a rename that missed a reference would fail later with an
+  error naming neither the patch nor the spec. Both ends must be in
+  the same section.
+
+Operations run **in the order written**, and that order is yours: a
+rename followed by a `set` on the renamed path is meaningful. If one
+fails, the spec is discarded rather than generated from.
+
+`why` is required. A patch whose reason is not written down cannot be
+retired, because nobody can tell later whether upstream still has the
+problem.
+
+Paths are written against **OpenAPI 3**, after conversion. Swagger 2.0
+is converted automatically, and a 2.0 document keeps `parameters` and
+`definitions` at the root — by the time patches run, those have moved
+under `components`.
+
+### A patch, or a generator setting?
+
+Not every failure is a defect in the spec:
+
+- **The spec is wrong** — a duplicate enum value, a `requestBody` with
+  no content, a `$ref` to a schema that is not there. Patch it.
+- **ogen cannot express something valid** — reported as `Feature
+  "<name>" is not implemented yet`. Add the name to
+  `ignore_not_implemented` in the `ogen.yml` written beside the output,
+  which is yours to edit.
+
+**Check that the result still compiles after skipping a feature.**
+Skipping is not always clean: some features emit a package that does
+not build rather than one missing those operations. `type-based
+discrimination with same jxType` is one — it can generate a type switch
+with a duplicate case. When that happens the spec genuinely cannot be
+generated from today, and saying so is better than shipping a package
+that does not build.
+
+### Finding what to patch
+
+Run it and read the error. ogen names the offending location:
+
+```
+expected schema type is "string", default value is int64
+duplicate enum value: "in_app_chat"
+content must have at least one entry
+```
+
+Each fix tends to reveal the next, so expect to iterate a few times on
+first setup. Once the patch file is complete it keeps working until
+upstream changes that part of the spec.
+
+If a patch stops applying, `generate client` fails with its position
+in the file, its operation, and where the path ran out:
+
+```
+patch 0 (remove): /info/title does not exist (stopped at /info)
+```
+
+That usually means upstream fixed the defect and the patch can be
+deleted.
+
 ## Generate from a spec you own
 
 A service that owns its spec needs none of the fetching, vendoring or
