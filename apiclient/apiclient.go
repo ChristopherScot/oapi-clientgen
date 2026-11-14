@@ -285,20 +285,32 @@ func files(set []templateFile, p Params) ([]File, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Go output goes through gofmt rather than being hand-spaced
-		// in the templates. Spacing is contextual - gofmt writes
-		// 30*time.Second as a call argument and 1 * time.Second in a
-		// composite literal - so a template, and goDuration in
-		// particular, cannot know which its output will land in. It
-		// writes the expression; gofmt decides how it is written.
+		// Go output goes through gofmt. The templates are kept
+		// gofmt-clean as written and a test holds them that way, so
+		// this changes nothing today - it is here because one
+		// template cannot stay that way by hand.
 		//
-		// A consumer's CI runs gofmt on these files and the fix for a
-		// diff there is always back here, so emitting anything else
-		// fails a lint on a file they are told not to edit.
+		// gofmt spaces a binary expression by how deeply it is
+		// nested: 30 * time.Second stays spaced on its own and is
+		// compressed to 30*time.Second inside a call that has other
+		// arguments. goDuration feeds seven call sites and cannot
+		// pick a spelling right at all of them, so the eighth one
+		// lands here rather than in a consumer's repo, where the file
+		// says "do not edit" and the fix is back in this repo anyway.
+		//
+		// Formatting only: format.Source does not add or remove
+		// imports, and accepts a fragment with no package clause
+		// without complaint. generated_test.go compiles the result,
+		// which is what catches those.
+		//
+		// TypeScript has no equivalent pass - there is no formatter
+		// in the standard library to call - so its templates must be
+		// formatter-clean as written. See
+		// TestNoTypeScriptParameterListEndsInAComma.
 		if strings.HasSuffix(f.path, ".go") {
 			formatted, err := format.Source([]byte(body))
 			if err != nil {
-				return nil, fmt.Errorf("%s does not parse: %w", f.path, err)
+				return nil, fmt.Errorf("apiclient: rendering %s: output is not valid Go: %w", f.tmpl, err)
 			}
 			body = string(formatted)
 		}

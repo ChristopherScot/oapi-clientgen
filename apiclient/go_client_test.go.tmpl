@@ -992,7 +992,11 @@ func TestPrintRetryAfterVerdicts(t *testing.T) {
 {{ range parityCases }}		{{ printf "%q" . }},
 {{ end }}	} {
 		resp := &http.Response{Header: http.Header{"Retry-After": []string{in}}}
-		wait, ok, tooLong := retryAfter(resp, {{ goDuration defaults.MaxRetryAfterMs }})
+		// goDuration writes "30 * time.Second"; gofmt tightens a
+		// binary expression nested in a call that has other
+		// arguments, so this one is written the way gofmt leaves it.
+		maxWait := {{ goDuration defaults.MaxRetryAfterMs }}
+		wait, ok, tooLong := retryAfter(resp, maxWait)
 		switch {
 		case tooLong:
 			answers[in] = "{{ verdicts.Stop }}"
